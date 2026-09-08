@@ -1,0 +1,5055 @@
+// =====================================================================
+// ADMINISTRAÇÃO DE ENCADEAMENTOS – Fase 1.8F-F1 (AJUSTE DE POSICIONAMENTO)
+// =====================================================================
+// Inclui todas as funcionalidades da Fase 1.8F-E5B acrescidas de:
+// - Coluna TOTAL na tabela (Valor Corrigido + Juros + SELIC)
+// - Total Geral Atualizado no resumo
+// - Remoção da coluna "Índice / Critério"
+// - Exibição compacta dos status e encadeamentos em linha
+// - Reorganização dos botões de modelos para o topo da guia
+// - Encadeamentos posicionados acima da tabela (legenda)
+// - Blocos de parâmetros recolhíveis (accordion)
+// =====================================================================
+
+// Inicialização segura das variáveis globais
+if (window.parametrosCorrecaoAtual === undefined) {
+    window.parametrosCorrecaoAtual = null;
+}
+if (window.parametrosJurosAtual === undefined) {
+    window.parametrosJurosAtual = null;
+}
+if (window.parametrosSelicAtual === undefined) {
+    window.parametrosSelicAtual = null;
+}
+if (window.diferencasAtualizacaoAtual === undefined) {
+    window.diferencasAtualizacaoAtual = null;
+}
+if (window.resultadosAtualizacao === undefined) {
+    window.resultadosAtualizacao = null;
+}
+
+// =====================================================================
+// AUXILIARES
+// =====================================================================
+
+function adminCompetenciaParaNumero(str) {
+    if (!str) return NaN;
+    var partes = str.split('/');
+    if (partes.length !== 2) return NaN;
+    var mes = parseInt(partes[0], 10);
+    var ano = parseInt(partes[1], 10);
+    if (isNaN(mes) || isNaN(ano) || mes < 1 || mes > 12 || ano < 1900) return NaN;
+    return ano * 100 + mes;
+}
+
+function adminProximaCompetenciaNumero(num) {
+    var ano = Math.floor(num / 100);
+    var mes = num % 100;
+    if (mes === 12) return (ano + 1) * 100 + 1;
+    return ano * 100 + (mes + 1);
+}
+
+function adminParseValorBrasileiro(texto) {
+    if (!texto) return 0;
+    var limpo = texto
+        .replace(/[^0-9,.-]/g, '')
+        .replace(/\./g, '')
+        .replace(',', '.');
+    return parseFloat(limpo) || 0;
+}
+
+function adminSanitizarNomeArquivo(nome) {
+    if (!nome || nome.trim() === '') return 'SEM-NOME';
+    var semAcentos = nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    var comHifens = semAcentos.replace(/['’`´]/g, '-');
+    var sanitizado = comHifens
+        .toUpperCase()
+        .replace(/\s+/g, '-')
+        .replace(/[^A-Z0-9-]/g, '')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+    return sanitizado || 'SEM-NOME';
+}
+
+function adminGerarNomeArquivo(tipo, nome) {
+    var nomeSanitizado = adminSanitizarNomeArquivo(nome);
+    if (tipo === 'correcao_monetaria') {
+        return 'CORRE-' + nomeSanitizado + '.corr';
+    } else if (tipo === 'juros_selic') {
+        return 'JUROS-' + nomeSanitizado + '.jur';
+    }
+    return 'parametros_' + tipo + '_' + nomeSanitizado + '.json';
+}
+
+function adminDataAtualFormatada() {
+    var agora = new Date();
+    var dia = String(agora.getDate()).padStart(2, '0');
+    var mes = String(agora.getMonth() + 1).padStart(2, '0');
+    var ano = agora.getFullYear();
+    return dia + '/' + mes + '/' + ano;
+}
+
+// =====================================================================
+// FUNÇÕES AUXILIARES PARA CATÁLOGO/BASE POR TIPO
+// =====================================================================
+
+function adminObterCatalogoPorTipo(tipo) {
+    if (tipo === 'correcao_monetaria') {
+        return window.CATALOGO_INDEXADORES_ATUALIZACAO || {};
+    } else if (tipo === 'juros_mora' || tipo === 'selic') {
+        return window.CATALOGO_INDEXADORES_JUROS || {};
+    }
+    return {};
+}
+
+function adminObterBasePorTipo(tipo) {
+    if (tipo === 'correcao_monetaria') {
+        return window.BASE_INDEXADORES_ATUALIZACAO || {};
+    } else if (tipo === 'juros_mora' || tipo === 'selic') {
+        return window.BASE_INDEXADORES_JUROS || {};
+    }
+    return {};
+}
+
+// =====================================================================
+// FUNÇÕES AUXILIARES PARA VERIFICAÇÃO DE ÍNDICES
+// =====================================================================
+
+function adminIndiceExisteNaBase(codigo, tipo) {
+    var catalogo = adminObterCatalogoPorTipo(tipo);
+    return !!catalogo[codigo];
+}
+
+function adminIndiceCompativelComTipo(codigo, tipo) {
+    var catalogo = adminObterCatalogoPorTipo(tipo);
+    var item = catalogo[codigo];
+    if (!item) return false;
+    return item.tipo === tipo;
+}
+
+function adminObterIndicesDisponiveisPorTipo(tipo) {
+    var catalogo = adminObterCatalogoPorTipo(tipo);
+    var resultados = [];
+    for (var chave in catalogo) {
+        if (catalogo.hasOwnProperty(chave)) {
+            var item = catalogo[chave];
+            if (item.tipo === tipo) {
+                resultados.push({
+                    codigo: chave,
+                    nome: item.nome || chave,
+                    descricao: item.descricao || '',
+                    termoInicialPadrao: item.termoInicialPadrao || null
+                });
+            }
+        }
+    }
+    resultados.sort(function(a, b) {
+        return a.nome.localeCompare(b.nome);
+    });
+    return resultados;
+}
+
+function adminVerificarBaseIndexadores() {
+    if (!window.INDEXADORES_ATUALIZACAO) {
+        adminExibirMensagem(
+            'Aviso: base de indexadores não carregada. Verifique data/indexadores.js.',
+            'warning'
+        );
+        return false;
+    }
+    return true;
+}
+
+// =====================================================================
+// GERENCIAMENTO DO MODAL ADMINISTRATIVO
+// =====================================================================
+
+var adminModalCriado = false;
+var adminEventosVinculados = false;
+var adminTipoAtual = 'correcao_monetaria';
+
+function criarModalAdmin() {
+    if (document.getElementById('adminModal')) return;
+
+    var overlay = document.createElement('div');
+    overlay.id = 'adminModal';
+    overlay.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden modal-overlay';
+
+    var modalContent = document.createElement('div');
+    modalContent.className = 'bg-white p-6 rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto shadow-xl';
+
+    modalContent.innerHTML = `
+        <h3 class="text-xl font-bold text-slate-800 mb-4">Administração de Parâmetros de Atualização</h3>
+
+        <div id="adminMensagens" class="mb-4 p-3 rounded-md hidden"></div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+                <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Tipo do parâmetro</label>
+                <select id="adminTipoParametro" class="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                    <option value="correcao_monetaria">Correção Monetária</option>
+                    <option value="juros_selic">Juros e SELIC</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Nome do encadeamento *</label>
+                <input type="text" id="adminNome" placeholder="Ex: CJF_PREVIDENCIARIO_2025" class="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+            </div>
+        </div>
+
+        <div class="mb-4">
+            <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Descrição (opcional)</label>
+            <textarea id="adminDescricao" rows="2" placeholder="Breve descrição do encadeamento..." class="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"></textarea>
+        </div>
+
+        <!-- SEÇÃO CORREÇÃO MONETÁRIA -->
+        <div id="adminSeccaoCorrecao" class="mb-4">
+            <div class="flex justify-between items-center mb-2">
+                <h4 class="text-sm font-bold text-slate-700 uppercase tracking-wide">Encadeamento de Correção Monetária</h4>
+                <button type="button" id="adminAdicionarLinhaCorrecao" class="px-3 py-1 bg-emerald-600 text-white text-xs rounded hover:bg-emerald-700 transition">+ Adicionar Linha</button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm border-collapse">
+                    <thead>
+                        <tr class="bg-slate-100 text-slate-600 text-xs uppercase">
+                            <th class="p-2 text-left">Índice</th>
+                            <th class="p-2 text-left">Data Inicial</th>
+                            <th class="p-2 text-left">Data Final</th>
+                            <th class="p-2 text-center">Ação</th>
+                        </tr>
+                    </thead>
+                    <tbody id="adminTabelaPeriodosCorrecao">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- SEÇÃO JUROS E SELIC -->
+        <div id="adminSeccaoJurosSelic" class="mb-4" style="display:none;">
+            <!-- Juros -->
+            <div class="mb-6">
+                <div class="flex justify-between items-center mb-2">
+                    <h4 class="text-sm font-bold text-slate-700 uppercase tracking-wide">Encadeamento de Juros de Mora</h4>
+                    <button type="button" id="adminAdicionarLinhaJuros" class="px-3 py-1 bg-emerald-600 text-white text-xs rounded hover:bg-emerald-700 transition">+ Adicionar Linha de Juros</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm border-collapse">
+                        <thead>
+                            <tr class="bg-slate-100 text-slate-600 text-xs uppercase">
+                                <th class="p-2 text-left">Índice</th>
+                                <th class="p-2 text-left">Data Inicial</th>
+                                <th class="p-2 text-left">Data Final</th>
+                                <th class="p-2 text-center">Ação</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminTabelaPeriodosJuros">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <!-- SELIC -->
+            <div>
+                <div class="flex justify-between items-center mb-2">
+                    <h4 class="text-sm font-bold text-slate-700 uppercase tracking-wide">Encadeamento SELIC</h4>
+                    <button type="button" id="adminAdicionarLinhaSelic" class="px-3 py-1 bg-emerald-600 text-white text-xs rounded hover:bg-emerald-700 transition">+ Adicionar Linha SELIC</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm border-collapse">
+                        <thead>
+                            <tr class="bg-slate-100 text-slate-600 text-xs uppercase">
+                                <th class="p-2 text-left">Índice</th>
+                                <th class="p-2 text-left">Data Inicial</th>
+                                <th class="p-2 text-left">Data Final</th>
+                                <th class="p-2 text-center">Ação</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminTabelaPeriodosSelic">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex flex-wrap gap-3 mt-4 border-t border-slate-200 pt-4">
+            <button type="button" id="adminValidar" class="px-4 py-2 bg-amber-600 text-white rounded-md hover:bg-amber-700 text-sm font-semibold shadow transition">Validar Encadeamento</button>
+            <button type="button" id="adminExportar" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm font-semibold shadow transition">Exportar Arquivo</button>
+            <button type="button" id="adminImportar" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 text-sm font-semibold shadow transition">Importar Arquivo</button>
+            <button type="button" id="adminFechar" class="px-4 py-2 border border-slate-300 text-slate-700 rounded-md hover:bg-slate-50 text-sm font-semibold transition">Fechar</button>
+        </div>
+
+        <input type="file" id="adminFileInput" accept=".corr,.jur,.json,application/json" class="hidden">
+    `;
+
+    overlay.appendChild(modalContent);
+    document.body.appendChild(overlay);
+
+    if (!window.INDEXADORES_ATUALIZACAO) {
+        adminExibirMensagem(
+            'Aviso: base de indexadores não carregada. Verifique data/indexadores.js.',
+            'warning'
+        );
+    }
+
+    adminAlternarSeccoes('correcao_monetaria');
+    adminAdicionarLinhaPeriodo('correcao');
+
+    if (!adminEventosVinculados) {
+        vincularEventosModal();
+        adminEventosVinculados = true;
+    }
+
+    adminModalCriado = true;
+}
+
+function adminAlternarSeccoes(tipo) {
+    var seccaoCorrecao = document.getElementById('adminSeccaoCorrecao');
+    var seccaoJurosSelic = document.getElementById('adminSeccaoJurosSelic');
+    if (tipo === 'correcao_monetaria') {
+        seccaoCorrecao.style.display = 'block';
+        seccaoJurosSelic.style.display = 'none';
+    } else if (tipo === 'juros_selic') {
+        seccaoCorrecao.style.display = 'none';
+        seccaoJurosSelic.style.display = 'block';
+    }
+}
+
+// =====================================================================
+// EVENTOS DO MODAL
+// =====================================================================
+
+function vincularEventosModal() {
+    document.getElementById('adminFechar').addEventListener('click', function() {
+        document.getElementById('adminModal').classList.add('hidden');
+    });
+
+    document.getElementById('adminModal').addEventListener('click', function(e) {
+        if (e.target === this) this.classList.add('hidden');
+    });
+
+    document.getElementById('adminTipoParametro').addEventListener('change', function() {
+        var novoTipo = this.value;
+        adminTipoAtual = novoTipo;
+        adminAlternarSeccoes(novoTipo);
+    });
+
+    document.getElementById('adminAdicionarLinhaCorrecao').addEventListener('click', function() {
+        adminAdicionarLinhaPeriodo('correcao');
+    });
+    document.getElementById('adminAdicionarLinhaJuros').addEventListener('click', function() {
+        adminAdicionarLinhaPeriodo('juros');
+    });
+    document.getElementById('adminAdicionarLinhaSelic').addEventListener('click', function() {
+        adminAdicionarLinhaPeriodo('selic');
+    });
+
+    document.getElementById('adminValidar').addEventListener('click', function() {
+        var dados = adminColetarDados();
+        var resultado = adminValidarDados(dados);
+        if (resultado.erros.length === 0) {
+            var msg = '✅ Encadeamento válido!';
+            if (resultado.avisos.length > 0) {
+                msg += '\n⚠️ Avisos:\n' + resultado.avisos.join('\n');
+            }
+            adminExibirMensagem(msg, 'success');
+        } else {
+            var msg = '❌ Erros:\n' + resultado.erros.join('\n');
+            if (resultado.avisos.length > 0) {
+                msg += '\n⚠️ Avisos:\n' + resultado.avisos.join('\n');
+            }
+            adminExibirMensagem(msg, 'error');
+        }
+    });
+
+    document.getElementById('adminExportar').addEventListener('click', function() {
+        var dados = adminColetarDados();
+        var resultado = adminValidarDados(dados);
+        if (resultado.erros.length > 0) {
+            var msg = '❌ Não é possível exportar:\n' + resultado.erros.join('\n');
+            if (resultado.avisos.length > 0) {
+                msg += '\n⚠️ Avisos:\n' + resultado.avisos.join('\n');
+            }
+            adminExibirMensagem(msg, 'error');
+            return;
+        }
+        adminExportarJSON(dados);
+    });
+
+    document.getElementById('adminImportar').addEventListener('click', function() {
+        document.getElementById('adminFileInput').click();
+    });
+
+    document.getElementById('adminFileInput').addEventListener('change', function(e) {
+        var file = e.target.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function(ev) {
+            try {
+                var json = JSON.parse(ev.target.result);
+                adminImportarJSON(json);
+            } catch (err) {
+                adminExibirMensagem('❌ Erro ao ler o arquivo: ' + err.message, 'error');
+            }
+        };
+        reader.readAsText(file);
+        this.value = '';
+    });
+}
+
+// =====================================================================
+// FUNÇÕES DE LINHAS DA TABELA DE PERÍODOS (GENERICAS)
+// =====================================================================
+
+function adminObterIndicesDisponiveisParaTabela(tipoTabela) {
+    var tipoParametro = '';
+    if (tipoTabela === 'correcao') tipoParametro = 'correcao_monetaria';
+    else if (tipoTabela === 'juros') tipoParametro = 'juros_mora';
+    else if (tipoTabela === 'selic') tipoParametro = 'selic';
+    return adminObterIndicesDisponiveisPorTipo(tipoParametro);
+}
+
+function adminCriarSelectIndiceParaTabela(tipoTabela, valorAtual, preservarIncompativel) {
+    preservarIncompativel = preservarIncompativel || false;
+    var tipoParametro = '';
+    if (tipoTabela === 'correcao') tipoParametro = 'correcao_monetaria';
+    else if (tipoTabela === 'juros') tipoParametro = 'juros_mora';
+    else if (tipoTabela === 'selic') tipoParametro = 'selic';
+
+    var indices = adminObterIndicesDisponiveisPorTipo(tipoParametro);
+    var html = '<select class="admin-select-indice w-full px-2 py-1 border border-slate-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" data-tipo-tabela="' + tipoTabela + '">';
+
+    var existeNaBase = adminIndiceExisteNaBase(valorAtual, tipoParametro);
+    var compativel = adminIndiceCompativelComTipo(valorAtual, tipoParametro);
+
+    if (preservarIncompativel && valorAtual && existeNaBase && !compativel) {
+        html += '<option value="' + valorAtual + '" selected>' + valorAtual + ' (incompatível com ' + tipoParametro + ')</option>';
+    }
+
+    if (valorAtual && !existeNaBase) {
+        html += '<option value="' + valorAtual + '" selected>' + valorAtual + ' (não cadastrado na base)</option>';
+    }
+
+    if (indices.length === 0) {
+        html += '<option value="">-- Nenhum índice disponível --</option>';
+    } else {
+        indices.forEach(function(item) {
+            var selected = (item.codigo === valorAtual && compativel) ? 'selected' : '';
+            var label = item.nome + ' (' + item.codigo + ')';
+            html += '<option value="' + item.codigo + '" ' + selected + '>' + label + '</option>';
+        });
+    }
+
+    html += '</select>';
+    return html;
+}
+
+function adminAdicionarLinhaPeriodo(tipoTabela, indice, inicio, fim, preservarIncompativel) {
+    preservarIncompativel = preservarIncompativel || false;
+    var tbodyId = '';
+    if (tipoTabela === 'correcao') tbodyId = 'adminTabelaPeriodosCorrecao';
+    else if (tipoTabela === 'juros') tbodyId = 'adminTabelaPeriodosJuros';
+    else if (tipoTabela === 'selic') tbodyId = 'adminTabelaPeriodosSelic';
+    else return;
+
+    var tbody = document.getElementById(tbodyId);
+    if (!tbody) return;
+
+    var linhas = tbody.querySelectorAll('tr');
+    var ultimoFim = null;
+    if (linhas.length > 0) {
+        var ultimaLinha = linhas[linhas.length - 1];
+        var fimInput = ultimaLinha.querySelector('.admin-data-fim');
+        if (fimInput && fimInput.value.trim() !== '') {
+            var fimNum = adminCompetenciaParaNumero(fimInput.value.trim());
+            if (!isNaN(fimNum)) {
+                var proxNum = adminProximaCompetenciaNumero(fimNum);
+                var ano = Math.floor(proxNum / 100);
+                var mes = proxNum % 100;
+                ultimoFim = String(mes).padStart(2, '0') + '/' + ano;
+            }
+        }
+    }
+
+    if (!inicio && ultimoFim) {
+        inicio = ultimoFim;
+    }
+
+    var tr = document.createElement('tr');
+    tr.className = 'border-b border-slate-200';
+
+    var selectIndice = adminCriarSelectIndiceParaTabela(tipoTabela, indice || '', preservarIncompativel);
+
+    tr.innerHTML = `
+        <td class="p-2">${selectIndice}</td>
+        <td class="p-2"><input type="text" class="admin-data-inicio w-full px-2 py-1 border border-slate-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="MM/AAAA" value="${inicio || ''}"></td>
+        <td class="p-2"><input type="text" class="admin-data-fim w-full px-2 py-1 border border-slate-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="MM/AAAA ou vazio" value="${fim || ''}"></td>
+        <td class="p-2 text-center"><button type="button" class="admin-remover-linha text-red-600 hover:text-red-800 text-xs font-bold">✕</button></td>
+    `;
+
+    tbody.appendChild(tr);
+
+    tr.querySelector('.admin-remover-linha').addEventListener('click', function() {
+        tr.remove();
+    });
+
+    tr.querySelectorAll('.admin-data-inicio, .admin-data-fim').forEach(function(input) {
+        input.addEventListener('input', function() {
+            var v = this.value.replace(/\D/g, '');
+            if (v.length > 6) v = v.substring(0, 6);
+            if (v.length >= 3) {
+                this.value = v.substring(0, 2) + '/' + v.substring(2);
+            } else {
+                this.value = v;
+            }
+        });
+    });
+
+    var selectElement = tr.querySelector('.admin-select-indice');
+    var inicioInput = tr.querySelector('.admin-data-inicio');
+    if (selectElement && inicioInput) {
+        selectElement.addEventListener('change', function() {
+            var selectedOption = this.options[this.selectedIndex];
+            var termoPadrao = selectedOption ? selectedOption.getAttribute('data-termo-padrao') : null;
+            if (termoPadrao && !inicioInput.value.trim()) {
+                inicioInput.value = termoPadrao;
+            }
+        });
+        setTimeout(function() {
+            var selectedOption = selectElement.options[selectElement.selectedIndex];
+            var termoPadrao = selectedOption ? selectedOption.getAttribute('data-termo-padrao') : null;
+            if (termoPadrao && !inicioInput.value.trim()) {
+                inicioInput.value = termoPadrao;
+            }
+        }, 50);
+    }
+}
+
+function adminAtualizarSelectsIndice() {
+    // mantido para compatibilidade
+}
+
+// =====================================================================
+// COLETA E VALIDAÇÃO DOS DADOS DO ADMIN
+// =====================================================================
+
+function adminColetarDados() {
+    var tipo = document.getElementById('adminTipoParametro').value;
+    var nome = document.getElementById('adminNome').value.trim();
+    var descricao = document.getElementById('adminDescricao').value.trim();
+
+    if (tipo === 'correcao_monetaria') {
+        var periodosCorrecao = adminColetarPeriodosDaTabela('adminTabelaPeriodosCorrecao');
+        return {
+            tipo: tipo,
+            nome: nome,
+            descricao: descricao,
+            periodos: periodosCorrecao,
+            juros: null,
+            selic: null
+        };
+    } else if (tipo === 'juros_selic') {
+        var periodosJuros = adminColetarPeriodosDaTabela('adminTabelaPeriodosJuros');
+        var periodosSelic = adminColetarPeriodosDaTabela('adminTabelaPeriodosSelic');
+        return {
+            tipo: tipo,
+            nome: nome,
+            descricao: descricao,
+            periodos: [],
+            juros: {
+                tipoParametro: 'juros_mora',
+                periodos: periodosJuros
+            },
+            selic: {
+                tipoParametro: 'selic',
+                periodos: periodosSelic
+            }
+        };
+    }
+    return null;
+}
+
+function adminColetarPeriodosDaTabela(tbodyId) {
+    var tbody = document.getElementById(tbodyId);
+    if (!tbody) return [];
+    var linhas = tbody.querySelectorAll('tr');
+    var periodos = [];
+    linhas.forEach(function(tr) {
+        var indiceSelect = tr.querySelector('.admin-select-indice');
+        var inicioInput = tr.querySelector('.admin-data-inicio');
+        var fimInput = tr.querySelector('.admin-data-fim');
+        if (!indiceSelect || !inicioInput) return;
+        var indice = indiceSelect.value;
+        var inicio = inicioInput.value.trim();
+        var fim = fimInput.value.trim();
+        periodos.push({ indice: indice, inicio: inicio, fim: fim });
+    });
+    return periodos;
+}
+
+function adminValidarDados(dados) {
+    var erros = [];
+    var avisos = [];
+
+    if (!dados.nome) {
+        erros.push('Nome do encadeamento é obrigatório.');
+    }
+
+    if (!dados.tipo) {
+        erros.push('Tipo do parâmetro é obrigatório.');
+    }
+
+    if (dados.tipo === 'correcao_monetaria') {
+        var resultCorrecao = adminValidarPeriodos(dados.periodos, 'correcao_monetaria');
+        erros = erros.concat(resultCorrecao.erros);
+        avisos = avisos.concat(resultCorrecao.avisos);
+        if (dados.periodos.length === 0) {
+            erros.push('Correção Monetária deve ter pelo menos um período.');
+        }
+    } else if (dados.tipo === 'juros_selic') {
+        if (dados.juros && dados.juros.periodos && dados.juros.periodos.length > 0) {
+            var resultJuros = adminValidarPeriodos(dados.juros.periodos, 'juros_mora');
+            erros = erros.concat(resultJuros.erros);
+            avisos = avisos.concat(resultJuros.avisos);
+        }
+        if (dados.selic && dados.selic.periodos && dados.selic.periodos.length > 0) {
+            var resultSelic = adminValidarPeriodos(dados.selic.periodos, 'selic');
+            erros = erros.concat(resultSelic.erros);
+            avisos = avisos.concat(resultSelic.avisos);
+        }
+
+        var jurosVazio = !dados.juros || !dados.juros.periodos || dados.juros.periodos.length === 0;
+        var selicVazio = !dados.selic || !dados.selic.periodos || dados.selic.periodos.length === 0;
+        if (jurosVazio && selicVazio) {
+            erros.push('Informe pelo menos um período de Juros de Mora ou SELIC.');
+        }
+    }
+
+    return { erros: erros, avisos: avisos };
+}
+
+function adminValidarPeriodos(periodos, tipoParametro) {
+    var erros = [];
+    var avisos = [];
+    if (!periodos || periodos.length === 0) {
+        return { erros: erros, avisos: avisos };
+    }
+
+    var regexMMAAAA = /^\d{2}\/\d{4}$/;
+    var periodosAbertos = 0;
+    var periodoAnteriorFimNum = null;
+
+    var periodosOrdenados = periodos.slice().sort(function(a, b) {
+        return adminCompetenciaParaNumero(a.inicio) - adminCompetenciaParaNumero(b.inicio);
+    });
+
+    var catalogo = adminObterCatalogoPorTipo(tipoParametro);
+    var baseDisponivel = Object.keys(catalogo).length > 0;
+
+    for (var i = 0; i < periodosOrdenados.length; i++) {
+        var p = periodosOrdenados[i];
+
+        if (!p.indice) {
+            erros.push('Linha ' + (i+1) + ' (' + tipoParametro + '): Índice não selecionado.');
+            continue;
+        }
+
+        if (baseDisponivel) {
+            if (!adminIndiceExisteNaBase(p.indice, tipoParametro)) {
+                avisos.push('Linha ' + (i+1) + ' (' + tipoParametro + '): Índice "' + p.indice + '" não existe no catálogo do tipo "' + tipoParametro + '". Será mantido no JSON, mas pode não ser reconhecido futuramente.');
+            } else {
+                var tipoIndexador = catalogo[p.indice].tipo;
+                if (tipoIndexador !== tipoParametro) {
+                    avisos.push('Linha ' + (i+1) + ' (' + tipoParametro + '): Índice "' + p.indice + '" pertence ao tipo "' + tipoIndexador + '", mas o encadeamento é do tipo "' + tipoParametro + '".');
+                }
+            }
+        }
+
+        if (!p.inicio || !regexMMAAAA.test(p.inicio)) {
+            erros.push('Linha ' + (i+1) + ' (' + tipoParametro + '): Data inicial "' + p.inicio + '" inválida. Use MM/AAAA.');
+            continue;
+        }
+        var numInicio = adminCompetenciaParaNumero(p.inicio);
+        if (isNaN(numInicio)) {
+            erros.push('Linha ' + (i+1) + ' (' + tipoParametro + '): Data inicial "' + p.inicio + '" inválida.');
+            continue;
+        }
+
+        var numFim = null;
+        if (p.fim) {
+            if (!regexMMAAAA.test(p.fim)) {
+                erros.push('Linha ' + (i+1) + ' (' + tipoParametro + '): Data final "' + p.fim + '" inválida. Use MM/AAAA ou deixe vazio.');
+                continue;
+            }
+            numFim = adminCompetenciaParaNumero(p.fim);
+            if (isNaN(numFim)) {
+                erros.push('Linha ' + (i+1) + ' (' + tipoParametro + '): Data final "' + p.fim + '" inválida.');
+                continue;
+            }
+            if (numFim < numInicio) {
+                erros.push('Linha ' + (i+1) + ' (' + tipoParametro + '): Data final anterior à data inicial.');
+                continue;
+            }
+        } else {
+            periodosAbertos++;
+            if (periodosAbertos > 1) {
+                erros.push('Linha ' + (i+1) + ' (' + tipoParametro + '): Apenas um período pode estar aberto (sem data final).');
+                continue;
+            }
+            numFim = Number.MAX_SAFE_INTEGER;
+        }
+
+        if (periodoAnteriorFimNum !== null && numInicio <= periodoAnteriorFimNum) {
+            erros.push('Linha ' + (i+1) + ' (' + tipoParametro + '): Período se sobrepõe ao anterior.');
+        }
+
+        periodoAnteriorFimNum = numFim;
+    }
+
+    return { erros: erros, avisos: avisos };
+}
+
+function adminExibirMensagem(texto, tipo) {
+    var div = document.getElementById('adminMensagens');
+    if (!div) return;
+    div.classList.remove('hidden', 'bg-green-100', 'text-green-700', 'bg-red-100', 'text-red-700', 'bg-amber-100', 'text-amber-700');
+    div.textContent = texto;
+    div.style.whiteSpace = 'pre-wrap';
+
+    if (tipo === 'success') {
+        div.classList.add('bg-green-100', 'text-green-700');
+    } else if (tipo === 'error') {
+        div.classList.add('bg-red-100', 'text-red-700');
+    } else if (tipo === 'warning') {
+        div.classList.add('bg-amber-100', 'text-amber-700');
+    }
+}
+
+// =====================================================================
+// EXPORTAÇÃO DO JSON DE PARÂMETROS
+// =====================================================================
+
+function adminExportarJSON(dados) {
+    if (dados.tipo === 'correcao_monetaria') {
+        var periodosOrdenados = dados.periodos.slice().sort(function(a, b) {
+            return adminCompetenciaParaNumero(a.inicio) - adminCompetenciaParaNumero(b.inicio);
+        });
+        var indices = [];
+        periodosOrdenados.forEach(function(p) {
+            if (p.indice && indices.indexOf(p.indice) === -1) {
+                indices.push(p.indice);
+            }
+        });
+        var jsonObj = {
+            tipoArquivo: 'parametros_atualizacao',
+            tipoParametro: 'correcao_monetaria',
+            versao: '1.0',
+            nome: dados.nome,
+            descricao: dados.descricao || '',
+            dataCriacao: adminDataAtualFormatada(),
+            indicesUtilizados: indices,
+            periodos: periodosOrdenados.map(function(p) {
+                return { indice: p.indice, inicio: p.inicio, fim: p.fim || '' };
+            })
+        };
+        var jsonStr = JSON.stringify(jsonObj, null, 2);
+        var blob = new Blob([jsonStr], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        var nomeArquivo = adminGerarNomeArquivo('correcao_monetaria', dados.nome);
+        link.href = url;
+        link.download = nomeArquivo;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        adminExibirMensagem('✅ Arquivo exportado com sucesso: ' + nomeArquivo, 'success');
+    } else if (dados.tipo === 'juros_selic') {
+        var jsonObj = {
+            tipoArquivo: 'parametros_juros_selic',
+            tipoParametro: 'juros_selic',
+            versao: '1.0',
+            nome: dados.nome,
+            descricao: dados.descricao || '',
+            dataCriacao: adminDataAtualFormatada(),
+            juros: null,
+            selic: null
+        };
+
+        if (dados.juros && dados.juros.periodos && dados.juros.periodos.length > 0) {
+            var periodosJuros = dados.juros.periodos.slice().sort(function(a, b) {
+                return adminCompetenciaParaNumero(a.inicio) - adminCompetenciaParaNumero(b.inicio);
+            });
+            var indicesJuros = [];
+            periodosJuros.forEach(function(p) {
+                if (p.indice && indicesJuros.indexOf(p.indice) === -1) {
+                    indicesJuros.push(p.indice);
+                }
+            });
+            jsonObj.juros = {
+                tipoParametro: 'juros_mora',
+                indicesUtilizados: indicesJuros,
+                periodos: periodosJuros.map(function(p) {
+                    return { indice: p.indice, inicio: p.inicio, fim: p.fim || '' };
+                })
+            };
+        }
+
+        if (dados.selic && dados.selic.periodos && dados.selic.periodos.length > 0) {
+            var periodosSelic = dados.selic.periodos.slice().sort(function(a, b) {
+                return adminCompetenciaParaNumero(a.inicio) - adminCompetenciaParaNumero(b.inicio);
+            });
+            var indicesSelic = [];
+            periodosSelic.forEach(function(p) {
+                if (p.indice && indicesSelic.indexOf(p.indice) === -1) {
+                    indicesSelic.push(p.indice);
+                }
+            });
+            jsonObj.selic = {
+                tipoParametro: 'selic',
+                indicesUtilizados: indicesSelic,
+                periodos: periodosSelic.map(function(p) {
+                    return { indice: p.indice, inicio: p.inicio, fim: p.fim || '' };
+                })
+            };
+        }
+
+        var jsonStr = JSON.stringify(jsonObj, null, 2);
+        var blob = new Blob([jsonStr], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        var nomeArquivo = adminGerarNomeArquivo('juros_selic', dados.nome);
+        link.href = url;
+        link.download = nomeArquivo;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        adminExibirMensagem('✅ Arquivo exportado com sucesso: ' + nomeArquivo, 'success');
+    }
+}
+
+// =====================================================================
+// IMPORTAÇÃO DE JSON NO MODAL ADMIN
+// =====================================================================
+
+function adminImportarJSON(json) {
+    if (json.tipoArquivo === 'parametros_atualizacao') {
+        if (!json.tipoParametro) {
+            adminExibirMensagem('❌ JSON inválido: tipoParametro ausente.', 'error');
+            return;
+        }
+        if (!json.nome) {
+            adminExibirMensagem('❌ JSON inválido: nome ausente.', 'error');
+            return;
+        }
+        if (!Array.isArray(json.periodos)) {
+            adminExibirMensagem('❌ JSON inválido: períodos ausentes ou inválidos.', 'error');
+            return;
+        }
+
+        if (json.tipoParametro === 'correcao_monetaria') {
+            document.getElementById('adminTipoParametro').value = 'correcao_monetaria';
+            adminTipoAtual = 'correcao_monetaria';
+            adminAlternarSeccoes('correcao_monetaria');
+            var tbodyCorrecao = document.getElementById('adminTabelaPeriodosCorrecao');
+            tbodyCorrecao.innerHTML = '';
+            json.periodos.forEach(function(p) {
+                adminAdicionarLinhaPeriodo('correcao', p.indice, p.inicio, p.fim || '', true);
+            });
+            document.getElementById('adminNome').value = json.nome || '';
+            document.getElementById('adminDescricao').value = json.descricao || '';
+            adminExibirMensagem('✅ Arquivo de correção importado com sucesso.', 'success');
+            limparResultadosAtualizacaoPreservandoDiferencas();
+            atualizarEncadeamentosVisuais();
+            return;
+        } else if (json.tipoParametro === 'juros_mora') {
+            document.getElementById('adminTipoParametro').value = 'juros_selic';
+            adminTipoAtual = 'juros_selic';
+            adminAlternarSeccoes('juros_selic');
+            var tbodyJuros = document.getElementById('adminTabelaPeriodosJuros');
+            tbodyJuros.innerHTML = '';
+            var tbodySelic = document.getElementById('adminTabelaPeriodosSelic');
+            tbodySelic.innerHTML = '';
+            json.periodos.forEach(function(p) {
+                adminAdicionarLinhaPeriodo('juros', p.indice, p.inicio, p.fim || '', true);
+            });
+            document.getElementById('adminNome').value = json.nome || '';
+            document.getElementById('adminDescricao').value = json.descricao || '';
+            adminExibirMensagem('✅ Arquivo de juros antigo importado com sucesso. (SELIC vazio)', 'success');
+            limparResultadosAtualizacaoPreservandoDiferencas();
+            atualizarEncadeamentosVisuais();
+            return;
+        } else if (json.tipoParametro === 'selic') {
+            document.getElementById('adminTipoParametro').value = 'juros_selic';
+            adminTipoAtual = 'juros_selic';
+            adminAlternarSeccoes('juros_selic');
+            var tbodyJuros = document.getElementById('adminTabelaPeriodosJuros');
+            tbodyJuros.innerHTML = '';
+            var tbodySelic = document.getElementById('adminTabelaPeriodosSelic');
+            tbodySelic.innerHTML = '';
+            json.periodos.forEach(function(p) {
+                adminAdicionarLinhaPeriodo('selic', p.indice, p.inicio, p.fim || '', true);
+            });
+            document.getElementById('adminNome').value = json.nome || '';
+            document.getElementById('adminDescricao').value = json.descricao || '';
+            adminExibirMensagem('✅ Arquivo de SELIC antigo importado com sucesso. (Juros vazio)', 'success');
+            limparResultadosAtualizacaoPreservandoDiferencas();
+            atualizarEncadeamentosVisuais();
+            return;
+        } else {
+            adminExibirMensagem('❌ Tipo de parâmetro não reconhecido.', 'error');
+            return;
+        }
+    }
+
+    if (json.tipoArquivo === 'parametros_juros_selic') {
+        if (json.tipoParametro !== 'juros_selic') {
+            adminExibirMensagem('❌ JSON inválido: tipo do pacote de Juros e SELIC incompatível.', 'error');
+            return;
+        }
+        if (!json.nome) {
+            adminExibirMensagem('❌ JSON inválido: nome ausente.', 'error');
+            return;
+        }
+
+        if (json.juros !== null && json.juros !== undefined) {
+            if (!Array.isArray(json.juros.periodos)) {
+                adminExibirMensagem('❌ JSON inválido: períodos de juros ausentes ou inválidos.', 'error');
+                return;
+            }
+        }
+        if (json.selic !== null && json.selic !== undefined) {
+            if (!Array.isArray(json.selic.periodos)) {
+                adminExibirMensagem('❌ JSON inválido: períodos SELIC ausentes ou inválidos.', 'error');
+                return;
+            }
+        }
+
+        document.getElementById('adminTipoParametro').value = 'juros_selic';
+        adminTipoAtual = 'juros_selic';
+        adminAlternarSeccoes('juros_selic');
+
+        var tbodyJuros = document.getElementById('adminTabelaPeriodosJuros');
+        tbodyJuros.innerHTML = '';
+        var tbodySelic = document.getElementById('adminTabelaPeriodosSelic');
+        tbodySelic.innerHTML = '';
+
+        if (json.juros && json.juros.periodos && json.juros.periodos.length > 0) {
+            json.juros.periodos.forEach(function(p) {
+                adminAdicionarLinhaPeriodo('juros', p.indice, p.inicio, p.fim || '', true);
+            });
+        }
+
+        if (json.selic && json.selic.periodos && json.selic.periodos.length > 0) {
+            json.selic.periodos.forEach(function(p) {
+                adminAdicionarLinhaPeriodo('selic', p.indice, p.inicio, p.fim || '', true);
+            });
+        }
+
+        document.getElementById('adminNome').value = json.nome || '';
+        document.getElementById('adminDescricao').value = json.descricao || '';
+        adminExibirMensagem('✅ Arquivo de Juros e SELIC importado com sucesso.', 'success');
+        limparResultadosAtualizacaoPreservandoDiferencas();
+        atualizarEncadeamentosVisuais();
+        return;
+    }
+
+    adminExibirMensagem('❌ O arquivo não é um JSON de parâmetros reconhecido.', 'error');
+}
+
+// =====================================================================
+// FUNÇÕES AUXILIARES PARA EXIBIÇÃO DOS PERÍODOS (Fase 1.8F-B4)
+// =====================================================================
+
+function adminObterNomeAmigavelIndice(codigo, tipoParametro) {
+    if (!codigo) return codigo;
+    var catalogo = adminObterCatalogoPorTipo(tipoParametro);
+    if (catalogo && catalogo[codigo] && catalogo[codigo].nome) {
+        return catalogo[codigo].nome;
+    }
+    return codigo;
+}
+
+function adminOrdenarPeriodosParaExibicao(periodos) {
+    if (!periodos || !Array.isArray(periodos)) return [];
+    var copia = periodos.slice();
+    copia.sort(function(a, b) {
+        return adminCompetenciaParaNumero(a.inicio) - adminCompetenciaParaNumero(b.inicio);
+    });
+    return copia;
+}
+
+function adminCriarBlocoPeriodosStatus(titulo, periodos, tipoParametro) {
+    var container = document.createElement('div');
+    container.className = 'mt-1 inline-flex flex-wrap gap-x-2 gap-y-1';
+
+    if (!periodos || periodos.length === 0) {
+        var nenhum = document.createElement('span');
+        nenhum.className = 'text-xs text-slate-500';
+        nenhum.textContent = 'Nenhum período definido.';
+        container.appendChild(nenhum);
+        return container;
+    }
+
+    var periodosOrdenados = adminOrdenarPeriodosParaExibicao(periodos);
+    var wrapper = document.createElement('span');
+    wrapper.className = 'inline-flex flex-wrap gap-x-2 gap-y-1';
+
+    periodosOrdenados.forEach(function(p) {
+        var item = document.createElement('span');
+        item.className = 'inline-flex items-baseline whitespace-nowrap';
+
+        var bullet = document.createElement('span');
+        bullet.className = 'text-green-900 font-bold mr-1';
+        bullet.textContent = '►';
+        item.appendChild(bullet);
+
+        var nome = document.createElement('span');
+        nome.className = 'text-green-900 font-semibold';
+        nome.textContent = adminObterNomeAmigavelIndice(p.indice, tipoParametro) + ':';
+        item.appendChild(nome);
+
+        var intervalo = document.createElement('span');
+        intervalo.className = 'text-green-700 ml-1';
+        if (p.fim && p.fim.trim() !== '') {
+            intervalo.textContent = p.inicio + ' a ' + p.fim;
+        } else {
+            intervalo.textContent = p.inicio + ' em diante';
+        }
+        item.appendChild(intervalo);
+
+        // Adiciona ponto e vírgula apenas se não for o último
+        var ponto = document.createElement('span');
+        ponto.textContent = ';';
+        ponto.className = 'ml-1';
+        item.appendChild(ponto);
+
+        wrapper.appendChild(item);
+    });
+
+    container.appendChild(wrapper);
+    return container;
+}
+
+// =====================================================================
+// FUNÇÃO PARA GERAR OS ENCADEAMENTOS VISUAIS (LEGENDA ACIMA DA TABELA)
+// =====================================================================
+function atualizarEncadeamentosVisuais() {
+    var container = document.getElementById('containerEncadeamentos');
+    if (!container) return;
+
+    // Limpa o container
+    container.innerHTML = '';
+    container.className = 'mt-3 p-3 bg-slate-50 border border-slate-200 rounded-lg';
+
+    var temAlgum = false;
+    var html = '';
+
+    // Correção
+    if (window.parametrosCorrecaoAtual && window.parametrosCorrecaoAtual.periodos && window.parametrosCorrecaoAtual.periodos.length > 0) {
+        temAlgum = true;
+        html += '<div class="text-sm font-semibold text-slate-700 mb-1">📈 Encadeamento Correção:</div>';
+        html += '<div class="ml-4 text-xs flex flex-wrap gap-x-2 gap-y-1">';
+        var periodosCorr = adminOrdenarPeriodosParaExibicao(window.parametrosCorrecaoAtual.periodos);
+        periodosCorr.forEach(function(p, idx) {
+            var nome = adminObterNomeAmigavelIndice(p.indice, 'correcao_monetaria');
+            var intervalo = p.fim && p.fim.trim() !== '' ? p.inicio + ' a ' + p.fim : p.inicio + ' em diante';
+            html += '<span class="inline-flex items-baseline whitespace-nowrap">';
+            html += '<span class="text-green-900 font-bold mr-1">►</span>';
+            html += '<span class="text-green-900 font-semibold">' + nome + ':</span>';
+            html += '<span class="text-green-700 ml-1">' + intervalo + '</span>';
+            if (idx < periodosCorr.length - 1) html += '<span class="ml-1">;</span>';
+            html += '</span>';
+        });
+        html += '</div>';
+    }
+
+    // Juros
+    if (window.parametrosJurosAtual && window.parametrosJurosAtual.periodos && window.parametrosJurosAtual.periodos.length > 0) {
+        temAlgum = true;
+        html += '<div class="text-sm font-semibold text-slate-700 mt-2 mb-1">📊 Encadeamento Juros:</div>';
+        html += '<div class="ml-4 text-xs flex flex-wrap gap-x-2 gap-y-1">';
+        var periodosJ = adminOrdenarPeriodosParaExibicao(window.parametrosJurosAtual.periodos);
+        periodosJ.forEach(function(p, idx) {
+            var nome = adminObterNomeAmigavelIndice(p.indice, 'juros_mora');
+            var intervalo = p.fim && p.fim.trim() !== '' ? p.inicio + ' a ' + p.fim : p.inicio + ' em diante';
+            html += '<span class="inline-flex items-baseline whitespace-nowrap">';
+            html += '<span class="text-green-900 font-bold mr-1">►</span>';
+            html += '<span class="text-green-900 font-semibold">' + nome + ':</span>';
+            html += '<span class="text-green-700 ml-1">' + intervalo + '</span>';
+            if (idx < periodosJ.length - 1) html += '<span class="ml-1">;</span>';
+            html += '</span>';
+        });
+        html += '</div>';
+    }
+
+    // SELIC
+    if (window.parametrosSelicAtual && window.parametrosSelicAtual.periodos && window.parametrosSelicAtual.periodos.length > 0) {
+        temAlgum = true;
+        html += '<div class="text-sm font-semibold text-slate-700 mt-2 mb-1">📉 Encadeamento SELIC:</div>';
+        html += '<div class="ml-4 text-xs flex flex-wrap gap-x-2 gap-y-1">';
+        var periodosS = adminOrdenarPeriodosParaExibicao(window.parametrosSelicAtual.periodos);
+        periodosS.forEach(function(p, idx) {
+            var nome = adminObterNomeAmigavelIndice(p.indice, 'selic');
+            var intervalo = p.fim && p.fim.trim() !== '' ? p.inicio + ' a ' + p.fim : p.inicio + ' em diante';
+            html += '<span class="inline-flex items-baseline whitespace-nowrap">';
+            html += '<span class="text-green-900 font-bold mr-1">►</span>';
+            html += '<span class="text-green-900 font-semibold">' + nome + ':</span>';
+            html += '<span class="text-green-700 ml-1">' + intervalo + '</span>';
+            if (idx < periodosS.length - 1) html += '<span class="ml-1">;</span>';
+            html += '</span>';
+        });
+        html += '</div>';
+    }
+
+    // A vigência jurídica do encadeamento não deve ser confundida com
+    // a disponibilidade atual da base de índices. Períodos finais abertos
+    // permanecem válidos até que outra regra os substitua.
+    var baseLimite = obterLimiteBaseDosIndexadores(
+        window.parametrosCorrecaoAtual,
+        window.parametrosJurosAtual,
+        window.parametrosSelicAtual
+    );
+    if (baseLimite) {
+        temAlgum = true;
+        html += '<div class="text-xs text-amber-600 mt-2">⚠️ Base de índices disponível até ' + baseLimite.ultimaCompetencia + '. A vigência das regras permanece aberta conforme o modelo; competências posteriores dependem da atualização da base.</div>';
+    }
+
+    if (temAlgum) {
+        container.innerHTML = html;
+        container.classList.remove('hidden');
+    } else {
+        container.classList.add('hidden');
+    }
+}
+
+// =====================================================================
+// FUNÇÃO adminAtualizarStatusDetalhado – versão compacta (sem encadeamentos)
+// =====================================================================
+function adminAtualizarStatusDetalhado(tipoEsperado, json, mensagemBase) {
+    var statusId = (tipoEsperado === 'correcao_monetaria') ? 'statusCorrecao' : 'statusJurosSelic';
+    var div = document.getElementById(statusId);
+    if (!div) return;
+
+    div.innerHTML = '';
+    div.className = 'flex-1 min-w-0 text-sm p-2 rounded-md bg-green-100 text-green-700 flex flex-wrap items-center gap-x-2 gap-y-1';
+
+    // Ícone e mensagem principal
+    var msgEl = document.createElement('span');
+    msgEl.className = 'font-semibold';
+    msgEl.textContent = mensagemBase || '✅ Parâmetros carregados!';
+    div.appendChild(msgEl);
+
+    if (json && json.nome) {
+        var nomeEl = document.createElement('span');
+        nomeEl.textContent = ' | Nome: ' + json.nome;
+        div.appendChild(nomeEl);
+    }
+
+    if (json && json.descricao) {
+        var descEl = document.createElement('span');
+        descEl.textContent = ' | Descrição: ' + json.descricao;
+        div.appendChild(descEl);
+    }
+
+    if (tipoEsperado === 'correcao_monetaria') {
+        var periodos = json.periodos || [];
+        var indices = [];
+        periodos.forEach(function(p) {
+            if (p.indice && indices.indexOf(p.indice) === -1) {
+                indices.push(p.indice);
+            }
+        });
+        var indiceStr = indices.length > 0 ? indices.join(', ') : 'N/A';
+        var infoEl = document.createElement('span');
+        infoEl.textContent = ' | Índices: ' + indiceStr + ' | Períodos: ' + periodos.length;
+        div.appendChild(infoEl);
+    } else if (tipoEsperado === 'juros_selic') {
+        var jurosPeriodos = (json.juros && json.juros.periodos) ? json.juros.periodos : [];
+        var selicPeriodos = (json.selic && json.selic.periodos) ? json.selic.periodos : [];
+
+        var jurosIndices = [];
+        jurosPeriodos.forEach(function(p) {
+            if (p.indice && jurosIndices.indexOf(p.indice) === -1) jurosIndices.push(p.indice);
+        });
+        var selicIndices = [];
+        selicPeriodos.forEach(function(p) {
+            if (p.indice && selicIndices.indexOf(p.indice) === -1) selicIndices.push(p.indice);
+        });
+
+        var infoEl = document.createElement('span');
+        var parts = [];
+        if (jurosPeriodos.length > 0) {
+            parts.push('Juros: ' + jurosIndices.join(', ') + ' (' + jurosPeriodos.length + ' períodos)');
+        }
+        if (selicPeriodos.length > 0) {
+            parts.push('SELIC: ' + selicIndices.join(', ') + ' (' + selicPeriodos.length + ' períodos)');
+        }
+        infoEl.textContent = ' | ' + parts.join(' | ');
+        div.appendChild(infoEl);
+    }
+}
+
+// =====================================================================
+// FUNÇÃO PARA OBTER O LIMITE TEMPORAL DO ENCADEAMENTO (Fase 1.8F-E3)
+// =====================================================================
+// =====================================================================
+// LIMITE DA BASE DE ÍNDICES (não confundir com vigência jurídica)
+// =====================================================================
+function obterLimiteBaseDosIndexadores(parametrosCorrecao, parametrosJuros, parametrosSelic) {
+    var limite = null;
+    function maxCompetenciaDaBase(codigo, tipo) {
+        if (!codigo) return null;
+        if (codigo === 'SEM_CORRECAO' || codigo === 'SEM_JUROS' ||
+            codigo === 'JUROS_1_AM' || codigo === 'JUROS_05_AM') return null;
+        var base = adminObterBasePorTipo(tipo);
+        var serie = base && base[codigo];
+        if (!serie || typeof serie !== 'object') return null;
+        var chaves = Object.keys(serie).filter(function(k) { return /^\d{4}-\d{2}$/.test(k); });
+        if (chaves.length === 0) return null;
+        chaves.sort();
+        return chaves[chaves.length - 1];
+    }
+    function examinar(periodos, tipo) {
+        if (!periodos || !Array.isArray(periodos)) return;
+        periodos.forEach(function(p) {
+            if (p.fim && p.fim.trim() !== '') return;
+            var maxISO = maxCompetenciaDaBase(p.indice, tipo);
+            if (!maxISO) return;
+            var comp = maxISO.slice(5, 7) + '/' + maxISO.slice(0, 4);
+            var num = adminCompetenciaParaNumero(comp);
+            if (isNaN(num)) return;
+            if (limite === null || num < adminCompetenciaParaNumero(limite)) limite = comp;
+        });
+    }
+    examinar(parametrosCorrecao && parametrosCorrecao.periodos, 'correcao_monetaria');
+    examinar(parametrosJuros && parametrosJuros.periodos, 'juros_mora');
+    examinar(parametrosSelic && parametrosSelic.periodos, 'selic');
+    return limite ? { ultimaCompetencia: limite } : null;
+}
+
+function obterLimiteDoEncadeamento(parametrosCorrecao, parametrosJuros, parametrosSelic) {
+    var ultimaCompetencia = null;
+    var origem = null;
+    var temPeriodoAberto = false;
+
+    function examinarPeriodos(periodos, nomeOrigem) {
+        if (!periodos || !Array.isArray(periodos) || periodos.length === 0) return;
+        for (var i = 0; i < periodos.length; i++) {
+            var p = periodos[i];
+            if (!p.fim || p.fim.trim() === '') {
+                temPeriodoAberto = true;
+                return;
+            }
+            var numFim = adminCompetenciaParaNumero(p.fim);
+            if (!isNaN(numFim)) {
+                if (ultimaCompetencia === null || numFim > adminCompetenciaParaNumero(ultimaCompetencia)) {
+                    ultimaCompetencia = p.fim;
+                    origem = nomeOrigem;
+                }
+            }
+        }
+    }
+
+    if (parametrosCorrecao && parametrosCorrecao.periodos) {
+        examinarPeriodos(parametrosCorrecao.periodos, 'Correção Monetária');
+    }
+    if (parametrosJuros && parametrosJuros.periodos) {
+        examinarPeriodos(parametrosJuros.periodos, 'Juros');
+    }
+    if (parametrosSelic && parametrosSelic.periodos) {
+        examinarPeriodos(parametrosSelic.periodos, 'SELIC');
+    }
+
+    if (temPeriodoAberto) {
+        return null;
+    }
+
+    if (ultimaCompetencia === null) {
+        return null;
+    }
+
+    return {
+        ultimaCompetencia: ultimaCompetencia,
+        origem: origem
+    };
+}
+
+// =====================================================================
+// FUNÇÃO PARA CARREGAR PARÂMETROS NA GUIA 5
+// =====================================================================
+
+function adminCarregarParametroGuia5(file, tipoEsperado) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            var json = JSON.parse(e.target.result);
+
+            if (tipoEsperado === 'correcao_monetaria') {
+                if (json.tipoArquivo !== 'parametros_atualizacao' ||
+                    json.tipoParametro !== 'correcao_monetaria' ||
+                    !json.nome ||
+                    !Array.isArray(json.periodos)) {
+                    adminExibirMensagemGuia5('O arquivo não é um JSON de correção monetária válido.', 'error', 'correcao_monetaria');
+                    return;
+                }
+                window.parametrosCorrecaoAtual = json;
+                adminAtualizarStatusDetalhado('correcao_monetaria', json, '✅ Parâmetros de correção carregados com sucesso!');
+                atualizarBotoesAtualizacao();
+                limparResultadosAtualizacaoPreservandoDiferencas();
+                atualizarEncadeamentosVisuais();
+                return;
+            }
+
+            if (json.tipoArquivo === 'parametros_juros_selic' && json.tipoParametro === 'juros_selic') {
+                if (!json.nome) {
+                    adminExibirMensagemGuia5('JSON inválido: nome ausente.', 'error', 'juros_selic');
+                    return;
+                }
+                if (json.juros !== null && json.juros !== undefined && !Array.isArray(json.juros.periodos)) {
+                    adminExibirMensagemGuia5('JSON inválido: períodos de juros ausentes ou inválidos.', 'error', 'juros_selic');
+                    return;
+                }
+                if (json.selic !== null && json.selic !== undefined && !Array.isArray(json.selic.periodos)) {
+                    adminExibirMensagemGuia5('JSON inválido: períodos SELIC ausentes ou inválidos.', 'error', 'juros_selic');
+                    return;
+                }
+
+                var jurosObj = json.juros ? Object.assign({}, json.juros, {
+                    nomePacote: json.nome || '',
+                    descricaoPacote: json.descricao || '',
+                    dataCriacaoPacote: json.dataCriacao || ''
+                }) : null;
+
+                var selicObj = json.selic ? Object.assign({}, json.selic, {
+                    nomePacote: json.nome || '',
+                    descricaoPacote: json.descricao || '',
+                    dataCriacaoPacote: json.dataCriacao || ''
+                }) : null;
+
+                window.parametrosJurosAtual = jurosObj;
+                window.parametrosSelicAtual = selicObj;
+
+                var pacoteCompleto = {
+                    nome: json.nome,
+                    descricao: json.descricao || '',
+                    juros: jurosObj,
+                    selic: selicObj
+                };
+                adminAtualizarStatusDetalhado('juros_selic', pacoteCompleto, '✅ Parâmetros de Juros e SELIC carregados com sucesso!');
+                limparResultadosAtualizacaoPreservandoDiferencas();
+                atualizarEncadeamentosVisuais();
+                return;
+            }
+
+            if (json.tipoArquivo === 'parametros_atualizacao') {
+                if (json.tipoParametro === 'correcao_monetaria') {
+                    adminExibirMensagemGuia5('Este arquivo é de correção monetária, não de juros/SELIC.', 'error', 'juros_selic');
+                    return;
+                } else if (json.tipoParametro === 'juros_mora') {
+                    if (!json.nome || !Array.isArray(json.periodos)) {
+                        adminExibirMensagemGuia5('JSON de juros inválido: períodos ausentes ou inválidos.', 'error', 'juros_selic');
+                        return;
+                    }
+                    window.parametrosJurosAtual = json;
+                    window.parametrosSelicAtual = null;
+                    var pacoteAntigo = {
+                        nome: json.nome,
+                        descricao: json.descricao || '',
+                        juros: json,
+                        selic: null
+                    };
+                    adminAtualizarStatusDetalhado('juros_selic', pacoteAntigo, '✅ Parâmetros de juros (formato antigo) carregados.');
+                    limparResultadosAtualizacaoPreservandoDiferencas();
+                    atualizarEncadeamentosVisuais();
+                    return;
+                } else if (json.tipoParametro === 'selic') {
+                    if (!json.nome || !Array.isArray(json.periodos)) {
+                        adminExibirMensagemGuia5('JSON de SELIC inválido: períodos ausentes ou inválidos.', 'error', 'juros_selic');
+                        return;
+                    }
+                    window.parametrosSelicAtual = json;
+                    window.parametrosJurosAtual = null;
+                    var pacoteAntigoSelic = {
+                        nome: json.nome,
+                        descricao: json.descricao || '',
+                        juros: null,
+                        selic: json
+                    };
+                    adminAtualizarStatusDetalhado('juros_selic', pacoteAntigoSelic, '✅ Parâmetros SELIC (formato antigo) carregados.');
+                    limparResultadosAtualizacaoPreservandoDiferencas();
+                    atualizarEncadeamentosVisuais();
+                    return;
+                }
+            }
+
+            adminExibirMensagemGuia5('Tipo de arquivo não reconhecido para Juros e SELIC.', 'error', 'juros_selic');
+
+        } catch (err) {
+            adminExibirMensagemGuia5('Erro ao ler o arquivo: ' + err.message, 'error', tipoEsperado);
+        }
+    };
+    reader.readAsText(file);
+}
+
+function adminExibirMensagemGuia5(texto, tipo, tipoEsperado) {
+    var statusId;
+    if (tipoEsperado === 'correcao_monetaria') {
+        statusId = 'statusCorrecao';
+    } else {
+        statusId = 'statusJurosSelic';
+    }
+    var div = document.getElementById(statusId);
+    if (!div) return;
+
+    div.innerHTML = '';
+    div.className = 'flex-1 min-w-0 text-sm p-2 rounded-md';
+    if (tipo === 'success') {
+        div.className += ' bg-green-100 text-green-700';
+    } else if (tipo === 'error') {
+        div.className += ' bg-red-100 text-red-700';
+    } else if (tipo === 'warning') {
+        div.className += ' bg-amber-100 text-amber-700';
+    } else {
+        div.className += ' bg-slate-100 text-slate-600';
+    }
+    var p = document.createElement('p');
+    p.textContent = texto;
+    div.appendChild(p);
+}
+
+// =====================================================================
+// LIMPAR DIFERENÇAS DA GUIA 5 (Fase 1.8F-A)
+// =====================================================================
+
+function limparDiferencasAtualizacao(mensagem) {
+    window.diferencasAtualizacaoAtual = null;
+    window.resultadosAtualizacao = null;
+
+    var container = document.getElementById('containerTabelaDiferencas');
+    var tbody = document.getElementById('corpoDiferencasAtualizacao');
+    var resumo = document.getElementById('resumoAtualizacao');
+    var totalOriginalEl = document.getElementById('totalOriginalAtualizacao');
+    var totalCorrigidoEl = document.getElementById('totalCorrigidoAtualizacao');
+    var totalJurosEl = document.getElementById('totalJurosAtualizacao');
+    var totalSelicEl = document.getElementById('totalSelicAtualizacao');
+    var totalGeralEl = document.getElementById('totalGeralAtualizacao');
+    var status = document.getElementById('statusDiferencas');
+    var statusAtualizacao = document.getElementById('statusAtualizacao');
+
+    if (container) container.classList.add('hidden');
+    if (resumo) resumo.classList.add('hidden');
+    if (tbody) tbody.innerHTML = '';
+    if (totalOriginalEl) totalOriginalEl.textContent = 'R$ 0,00';
+    if (totalCorrigidoEl) totalCorrigidoEl.textContent = 'R$ 0,00';
+    if (totalJurosEl) totalJurosEl.textContent = 'R$ 0,00';
+    if (totalSelicEl) totalSelicEl.textContent = 'R$ 0,00';
+    if (totalGeralEl) totalGeralEl.textContent = 'Total Geral Atualizado: R$ 0,00';
+
+    if (status) {
+        status.textContent = mensagem || 'Nenhuma diferença importada.';
+        status.className = 'text-sm text-slate-500';
+    }
+    if (statusAtualizacao) {
+        statusAtualizacao.textContent = 'Aguardando diferenças e parâmetros de correção.';
+        statusAtualizacao.className = 'text-sm text-slate-500';
+    }
+
+    // Oculta encadeamentos
+    var encContainer = document.getElementById('containerEncadeamentos');
+    if (encContainer) encContainer.classList.add('hidden');
+
+    atualizarBotoesAtualizacao();
+}
+
+// =====================================================================
+// RESET AUTOMÁTICO DOS RESULTADOS (Fase 1.8F-E1)
+// =====================================================================
+
+function limparResultadosAtualizacaoPreservandoDiferencas() {
+    window.resultadosAtualizacao = null;
+
+    var container = document.getElementById('containerTabelaDiferencas');
+    var tbody = document.getElementById('corpoDiferencasAtualizacao');
+    var resumo = document.getElementById('resumoAtualizacao');
+    var totalOriginalEl = document.getElementById('totalOriginalAtualizacao');
+    var totalCorrigidoEl = document.getElementById('totalCorrigidoAtualizacao');
+    var totalJurosEl = document.getElementById('totalJurosAtualizacao');
+    var totalSelicEl = document.getElementById('totalSelicAtualizacao');
+    var totalGeralEl = document.getElementById('totalGeralAtualizacao');
+    var statusAtualizacao = document.getElementById('statusAtualizacao');
+
+    if (container) container.classList.add('hidden');
+    if (resumo) resumo.classList.add('hidden');
+    if (tbody) tbody.innerHTML = '';
+    if (totalOriginalEl) totalOriginalEl.textContent = 'R$ 0,00';
+    if (totalCorrigidoEl) totalCorrigidoEl.textContent = 'R$ 0,00';
+    if (totalJurosEl) totalJurosEl.textContent = 'R$ 0,00';
+    if (totalSelicEl) totalSelicEl.textContent = 'R$ 0,00';
+    if (totalGeralEl) totalGeralEl.textContent = 'Total Geral Atualizado: R$ 0,00';
+
+    if (statusAtualizacao) {
+        statusAtualizacao.textContent = 'Parâmetros alterados. Execute novamente o cálculo da atualização.';
+        statusAtualizacao.className = 'text-sm text-amber-700';
+    }
+}
+
+// =====================================================================
+// COLETA DE DIFERENÇAS DA GUIA 4 (PREPARAÇÃO PARA FUTURO)
+// =====================================================================
+
+function coletarDiferencasParaAtualizacao() {
+    // Fase 2.0A: ações condenatórias usam a composição própria da Guia 4.
+    // O restante do fluxo recebe exatamente a mesma estrutura padronizada.
+    var tipoAcao = document.getElementById('tipoAcao')?.value || 'previdenciaria';
+    if (tipoAcao === 'condenatoria' && window.contadjusAcoesGerais) {
+        return window.contadjusAcoesGerais.coletarParaAtualizacao();
+    }
+
+    var rows = document.querySelectorAll('#corpoDiferencas tr');
+    var resultados = [];
+
+    rows.forEach(function(tr) {
+        var competencia = tr.dataset.competencia;
+        if (!competencia) return;
+
+        var diffEl = tr.querySelector('.diferenca-devida');
+        if (!diffEl) return;
+
+        var valorTexto = diffEl.textContent.trim();
+        var valorNum = adminParseValorBrasileiro(valorTexto);
+        if (isNaN(valorNum)) return;
+
+        resultados.push({
+            competencia: competencia,
+            diferenca: valorNum
+        });
+    });
+
+    return resultados;
+}
+
+// =====================================================================
+// FUNÇÃO AUXILIAR PARA FORMATAÇÃO DE PERCENTUAIS (Fase 1.8F-B2)
+// =====================================================================
+
+function formatarPercentualAtualizacao(valor, casas) {
+    if (casas === undefined || casas === null) {
+        casas = 4;
+    }
+
+    if (
+        valor === null ||
+        valor === undefined ||
+        !Number.isFinite(Number(valor))
+    ) {
+        return '-';
+    }
+
+    return Number(valor).toLocaleString('pt-BR', {
+        minimumFractionDigits: casas,
+        maximumFractionDigits: casas
+    }) + '%';
+}
+
+// =====================================================================
+// FASE 1.8D2 – CÁLCULO DE JUROS EM INTERVALO (CORRIGIDO + ESTACIONADO)
+// =====================================================================
+
+function guia5CalcularJurosIntervalo(item, inicioJurosISO, fimISO, parametrosJuros, dataAtualizacaoISO) {
+    var competenciaISO = item.competenciaISO;
+    var compNum = guia5ISOParaNumero(competenciaISO);
+    var inicioNum = Math.max(compNum, guia5ISOParaNumero(inicioJurosISO));
+    var inicioEfetivoISO = String(Math.floor(inicioNum / 100)) + '-' + String(inicioNum % 100).padStart(2, '0');
+    var fimNum = guia5ISOParaNumero(fimISO);
+
+    if (inicioNum > fimNum) {
+        return {
+            percentual: 0,
+            valor: 0,
+            criterios: [],
+            meses: 0,
+            detalhamento: []
+        };
+    }
+
+    var cursor = inicioEfetivoISO;
+    var criteriosJuros = [];
+    var detalhamentoJuros = [];
+    var totalTaxa = 0;
+    var meses = 0;
+
+    while (guia5ISOParaNumero(cursor) <= fimNum) {
+        var periodo = guia5ObterPeriodoDoEncadeamento(parametrosJuros, cursor);
+        if (!periodo) {
+            break;
+        }
+
+        // TAXA LEGAL: a competência da própria data de atualização não recebe
+        // a taxa daquele mesmo mês. A competência continua na tabela, mas a
+        // taxa é aplicada somente até o mês anterior à atualização.
+        //
+        // IMPORTANTE: esta função também é usada pelo fluxo que possui SELIC.
+        // A correção anterior foi feita apenas no motor determinístico e, por
+        // isso, o MC-ACOES-GERAL-2026 continuou aplicando a taxa de 08/2026
+        // no caminho pós-SELIC. O corte precisa existir aqui também.
+        if ((periodo.indice === 'TAXA_LEGAL' || periodo.indice === 'TAXA_LEGAL_PREVIDENCIARIA') &&
+            dataAtualizacaoISO && cursor === dataAtualizacaoISO) {
+            break;
+        }
+
+        if (periodo.indice === 'TAXA_LEGAL' || periodo.indice === 'TAXA_LEGAL_PREVIDENCIARIA') {
+            var taxaLegalAplicada = guia5ObterTaxaJurosMensal(periodo.indice, cursor);
+            totalTaxa += taxaLegalAplicada;
+            meses++;
+
+            if (criteriosJuros.indexOf(periodo.indice) === -1) {
+                criteriosJuros.push(periodo.indice);
+            }
+
+            detalhamentoJuros.push({
+                competenciaISO: cursor,
+                competenciaTaxaISO: cursor,
+                indice: periodo.indice,
+                taxaPercentual: taxaLegalAplicada
+            });
+        } else {
+            var taxa = guia5ObterTaxaJurosMensal(periodo.indice, cursor);
+            totalTaxa += taxa;
+            meses++;
+
+            if (criteriosJuros.indexOf(periodo.indice) === -1) {
+                criteriosJuros.push(periodo.indice);
+            }
+
+            detalhamentoJuros.push({
+                competenciaISO: cursor,
+                indice: periodo.indice,
+                taxaPercentual: taxa
+            });
+        }
+
+        cursor = guia5ProximaCompetenciaISO(cursor);
+    }
+
+    var valorJuros = item.valorCorrigido * totalTaxa / 100;
+
+    return {
+        percentual: totalTaxa,
+        valor: valorJuros,
+        criterios: criteriosJuros,
+        meses: meses,
+        detalhamento: detalhamentoJuros
+    };
+}
+
+// =====================================================================
+// FASE 1.8D – MOTOR SELIC (VERSÃO CORRIGIDA + ESTACIONADO)
+// =====================================================================
+
+function guia5ObterTaxaSelicMensal(competenciaISO) {
+    if (!window.BASE_INDEXADORES_JUROS || !window.BASE_INDEXADORES_JUROS.SELIC) {
+        throw new Error('Base SELIC não carregada.');
+    }
+    var taxa = window.BASE_INDEXADORES_JUROS.SELIC[competenciaISO];
+    if (taxa === undefined || taxa === null) {
+        throw new Error('Competência ' + competenciaISO + ' não encontrada na série SELIC.');
+    }
+    return taxa;
+}
+
+function guia5CalcularSelic(item, atualizacaoISO, parametrosSelic) {
+    var competenciaISO = item.competenciaISO;
+    var fimNum = guia5ISOParaNumero(atualizacaoISO);
+
+    var periodos = parametrosSelic.periodos.slice().sort(function(a, b) {
+        return adminCompetenciaParaNumero(a.inicio) - adminCompetenciaParaNumero(b.inicio);
+    });
+    if (periodos.length === 0) {
+        throw new Error('Encadeamento SELIC vazio.');
+    }
+
+    var ultimoPeriodo = periodos[periodos.length - 1];
+    var limiteFimNum = fimNum;
+    if (ultimoPeriodo.fim && ultimoPeriodo.fim.trim() !== '') {
+        var ultimoFimISO = guia5CompetenciaParaISO(ultimoPeriodo.fim);
+        if (ultimoFimISO) {
+            var ultimoFimNum = guia5ISOParaNumero(ultimoFimISO);
+            if (ultimoFimNum < fimNum) {
+                limiteFimNum = ultimoFimNum;
+            }
+        }
+    }
+
+    var inicioGlobalISO = guia5CompetenciaParaISO(periodos[0].inicio);
+    if (!inicioGlobalISO) {
+        throw new Error('Início do primeiro período SELIC inválido.');
+    }
+    var inicioGlobalNum = guia5ISOParaNumero(inicioGlobalISO);
+
+    var inicioNum = Math.max(guia5ISOParaNumero(competenciaISO), inicioGlobalNum);
+    var inicioEfetivoISO = String(Math.floor(inicioNum / 100)) + '-' + String(inicioNum % 100).padStart(2, '0');
+
+    // CORREÇÃO FASE 1.8F-E4B: incluir o mês inicial
+    var cursor = inicioEfetivoISO;
+    var detalhamentoSelic = [];
+    var totalTaxa = 0;
+    var meses = 0;
+
+    while (guia5ISOParaNumero(cursor) <= fimNum && guia5ISOParaNumero(cursor) <= limiteFimNum) {
+        var periodo = guia5ObterPeriodoDoEncadeamento(parametrosSelic, cursor);
+        if (!periodo) {
+            break;
+        }
+        if (periodo.indice !== 'SELIC') {
+            throw new Error('Índice SELIC esperado, mas encontrado: ' + periodo.indice);
+        }
+        var taxa = guia5ObterTaxaSelicMensal(cursor);
+        totalTaxa += taxa;
+        meses++;
+
+        detalhamentoSelic.push({
+            competenciaISO: cursor,
+            indice: periodo.indice,
+            taxaPercentual: taxa
+        });
+
+        cursor = guia5ProximaCompetenciaISO(cursor);
+    }
+
+    var valorSelic = item.valorCorrigido * totalTaxa / 100;
+
+    return {
+        inicioSelicEfetivoISO: inicioEfetivoISO,
+        fimSelicISO: atualizacaoISO,
+        quantidadeMesesSelic: meses,
+        percentualSelic: totalTaxa,
+        valorSelic: valorSelic,
+        detalhamentoSelic: detalhamentoSelic
+    };
+}
+
+// =====================================================================
+// FASE 1.8F-B1 – MOTOR INTERNO DE JUROS DETERMINÍSTICOS (CORRIGIDO + ESTACIONADO)
+// =====================================================================
+
+function guia5ObterTaxaJurosMensal(indice, competenciaISO) {
+    switch (indice) {
+        case 'SEM_JUROS':
+            return 0;
+        case 'JUROS_05_AM':
+            return 0.5;
+        case 'JUROS_1_AM':
+            return 1;
+        case 'JUROS_2_AA_EC136':
+            return 2 / 12;
+        case 'SELIC':
+            // SELIC também pode compor o encadeamento de JUROS DE MORA
+            // em modelos que a utilizam nesse bloco (ex.: MC GERAL 2026 – SELIC).
+            // Não confundir com a SELIC EC 113 calculada pelo bloco próprio.
+            return guia5ObterTaxaSelicMensal(competenciaISO);
+        case 'JUROS_POUPANCA':
+            if (!window.BASE_INDEXADORES_JUROS || !window.BASE_INDEXADORES_JUROS.JUROS_POUPANCA) {
+                throw new Error('Base da Poupança não carregada.');
+            }
+            var taxa = window.BASE_INDEXADORES_JUROS.JUROS_POUPANCA[competenciaISO];
+            if (taxa === undefined || taxa === null) {
+                throw new Error('Competência ' + competenciaISO + ' não encontrada na série da Poupança.');
+            }
+            return taxa;
+        case 'TAXA_LEGAL':
+            if (!window.BASE_INDEXADORES_JUROS || !window.BASE_INDEXADORES_JUROS.TAXA_LEGAL) {
+                throw new Error('Base da Taxa Legal não carregada.');
+            }
+            var taxaLegal = window.BASE_INDEXADORES_JUROS.TAXA_LEGAL[competenciaISO];
+            if (taxaLegal === undefined || taxaLegal === null) {
+                throw new Error('Competência ' + competenciaISO + ' não encontrada na série da Taxa Legal.');
+            }
+            return taxaLegal;
+        case 'TAXA_LEGAL_PREVIDENCIARIA':
+            if (!window.BASE_INDEXADORES_JUROS || !window.BASE_INDEXADORES_JUROS.TAXA_LEGAL_PREVIDENCIARIA) {
+                throw new Error('Base da Taxa Legal Previdenciária não carregada.');
+            }
+            var taxaLegalPrev = window.BASE_INDEXADORES_JUROS.TAXA_LEGAL_PREVIDENCIARIA[competenciaISO];
+            if (taxaLegalPrev === undefined || taxaLegalPrev === null) {
+                throw new Error('Competência ' + competenciaISO + ' não encontrada na série da Taxa Legal Previdenciária.');
+            }
+            return taxaLegalPrev;
+        default:
+            throw new Error('Índice de juros ainda não implementado nesta fase: ' + indice);
+    }
+}
+
+function guia5CalcularJurosDeterministicos(item, inicioJurosISO, atualizacaoISO, parametrosJuros) {
+    var competenciaISO = item.competenciaISO;
+
+    var inicioNum = Math.max(
+        guia5ISOParaNumero(competenciaISO),
+        guia5ISOParaNumero(inicioJurosISO)
+    );
+    var inicioEfetivoISO = String(Math.floor(inicioNum / 100)) + '-' + String(inicioNum % 100).padStart(2, '0');
+
+    var fimNum = guia5ISOParaNumero(atualizacaoISO);
+    if (inicioNum > fimNum) {
+        return {
+            inicioJurosEfetivoISO: inicioEfetivoISO,
+            fimJurosISO: atualizacaoISO,
+            criteriosJuros: [],
+            quantidadeMesesJuros: 0,
+            percentualJurosAntesSelic: 0,
+            percentualTaxaLegal: 0,
+            percentualJurosTotal: 0,
+            valorJuros: 0,
+            detalhamentoJuros: []
+        };
+    }
+
+    var cursor = inicioEfetivoISO;
+    var criteriosJuros = [];
+    var detalhamentoJuros = [];
+    var totalTaxa = 0;
+    var meses = 0;
+
+    while (guia5ISOParaNumero(cursor) <= fimNum) {
+        var periodo = guia5ObterPeriodoDoEncadeamento(parametrosJuros, cursor);
+        if (!periodo) {
+            break;
+        }
+
+        // TAXA LEGAL: a competência da própria data de atualização não recebe
+        // a taxa daquele mesmo mês. A conta pode permanecer aberta até a
+        // data de atualização, mas a Taxa Legal deve parar na competência anterior.
+        // Não aplicar esta regra à SELIC nem aos demais critérios de juros.
+        if (periodo.indice === 'TAXA_LEGAL' && cursor === atualizacaoISO) {
+            break;
+        }
+
+        var taxa = guia5ObterTaxaJurosMensal(periodo.indice, cursor);
+        totalTaxa += taxa;
+        meses++;
+
+        if (criteriosJuros.indexOf(periodo.indice) === -1) {
+            criteriosJuros.push(periodo.indice);
+        }
+
+        detalhamentoJuros.push({
+            competenciaISO: cursor,
+            indice: periodo.indice,
+            taxaPercentual: taxa
+        });
+
+        cursor = guia5ProximaCompetenciaISO(cursor);
+    }
+
+    var valorJuros = item.valorCorrigido * totalTaxa / 100;
+
+    return {
+        inicioJurosEfetivoISO: inicioEfetivoISO,
+        fimJurosISO: atualizacaoISO,
+        criteriosJuros: criteriosJuros,
+        quantidadeMesesJuros: meses,
+        percentualJurosAntesSelic: totalTaxa,
+        percentualTaxaLegal: 0,
+        percentualJurosTotal: totalTaxa,
+        valorJuros: valorJuros,
+        detalhamentoJuros: detalhamentoJuros
+    };
+}
+
+// =====================================================================
+// FASE 1.8E – CÁLCULO DO COEFICIENTE DE CORREÇÃO (ESTACIONADO)
+// =====================================================================
+
+function guia5DeveUsarManualMC2026(parametros) {
+    return !!(
+        parametros &&
+        parametros.usarCoeficienteManualMC2026 === true
+    );
+}
+
+function guia5CalcularCoeficienteMensal(competenciaISO, atualizacaoISO, parametros) {
+    var compNum = guia5ISOParaNumero(competenciaISO);
+    var atualNum = guia5ISOParaNumero(atualizacaoISO);
+
+    if (isNaN(compNum) || isNaN(atualNum)) {
+        throw new Error('Competência ou data de atualização inválida.');
+    }
+
+    if (compNum >= atualNum) {
+        return {
+            coeficiente: 1.0000,
+            criterio: 'Sem atualização até a data informada'
+        };
+    }
+
+    if (
+        guia5DeveUsarManualMC2026(parametros) &&
+        window.BASE_INDICE_PREVID_MC2026 &&
+        window.calcularCoeficientePrevidMC2026 &&
+        window.BASE_INDICE_PREVID_MC2026[competenciaISO] !== undefined &&
+        window.BASE_INDICE_PREVID_MC2026[atualizacaoISO] !== undefined
+    ) {
+        return {
+            coeficiente: window.calcularCoeficientePrevidMC2026(competenciaISO, atualizacaoISO),
+            criterio: 'Manual MC2026 acumulado'
+        };
+    }
+
+    var acumulado = 1.0000;
+    var cursor = competenciaISO;
+    var indicesUsados = [];
+
+    while (guia5ISOParaNumero(cursor) < atualNum) {
+        var periodo = guia5ObterPeriodoDoEncadeamento(parametros, cursor);
+
+        if (!periodo || !periodo.indice) {
+            if (indicesUsados.indexOf('ESTACIONADO') === -1) {
+                indicesUsados.push('ESTACIONADO');
+            }
+            break;
+        }
+
+        var fator = guia5ObterFatorMensal(periodo.indice, cursor);
+        acumulado = acumulado * fator;
+
+        if (indicesUsados.indexOf(periodo.indice) === -1) {
+            indicesUsados.push(periodo.indice);
+        }
+
+        cursor = guia5ProximaCompetenciaISO(cursor);
+    }
+
+    return {
+        coeficiente: acumulado,
+        criterio: indicesUsados.join(' / ')
+    };
+}
+
+// =====================================================================
+// FUNÇÕES AUXILIARES DE CONVERSÃO DE COMPETÊNCIA
+// =====================================================================
+
+function guia5CompetenciaParaISO(competencia) {
+    if (!competencia) return null;
+    if (competencia.indexOf('13º') === 0) {
+        var partes13 = competencia.split('/');
+        if (partes13.length !== 2) return null;
+        var ano13 = parseInt(partes13[1], 10);
+        if (isNaN(ano13)) return null;
+        return ano13 + '-12';
+    }
+    var partes = competencia.split('/');
+    if (partes.length !== 2) return null;
+    var mes = parseInt(partes[0], 10);
+    var ano = parseInt(partes[1], 10);
+    if (isNaN(mes) || isNaN(ano) || mes < 1 || mes > 12) return null;
+    return ano + '-' + String(mes).padStart(2, '0');
+}
+
+function guia5ISOParaNumero(iso) {
+    if (!iso) return NaN;
+    var partes = iso.split('-');
+    if (partes.length !== 2) return NaN;
+    var ano = parseInt(partes[0], 10);
+    var mes = parseInt(partes[1], 10);
+    if (isNaN(ano) || isNaN(mes)) return NaN;
+    return ano * 100 + mes;
+}
+
+function guia5ProximaCompetenciaISO(iso) {
+    var partes = iso.split('-');
+    var ano = parseInt(partes[0], 10);
+    var mes = parseInt(partes[1], 10);
+    if (mes === 12) {
+        ano++;
+        mes = 1;
+    } else {
+        mes++;
+    }
+    return ano + '-' + String(mes).padStart(2, '0');
+}
+
+function guia5AnteriorCompetenciaISO(iso) {
+    var partes = iso.split('-');
+    var ano = parseInt(partes[0], 10);
+    var mes = parseInt(partes[1], 10);
+    if (!Number.isFinite(ano) || !Number.isFinite(mes)) return null;
+    if (mes === 1) {
+        ano--;
+        mes = 12;
+    } else {
+        mes--;
+    }
+    return ano + '-' + String(mes).padStart(2, '0');
+}
+
+function guia5ISOParaBR(iso) {
+    if (!iso) return '';
+    var partes = iso.split('-');
+    return partes[1] + '/' + partes[0];
+}
+
+function guia5ObterPeriodoDoEncadeamento(parametros, competenciaISO) {
+    if (!parametros || !parametros.periodos || parametros.periodos.length === 0) {
+        return null;
+    }
+    var compNum = guia5ISOParaNumero(competenciaISO);
+    for (var i = 0; i < parametros.periodos.length; i++) {
+        var p = parametros.periodos[i];
+        var inicioISO = guia5CompetenciaParaISO(p.inicio);
+        var fimISO = p.fim ? guia5CompetenciaParaISO(p.fim) : null;
+        if (!inicioISO) continue;
+        var inicioNum = guia5ISOParaNumero(inicioISO);
+        var fimNum = fimISO ? guia5ISOParaNumero(fimISO) : Number.MAX_SAFE_INTEGER;
+        if (compNum >= inicioNum && compNum <= fimNum) {
+            return p;
+        }
+    }
+    return null;
+}
+
+function guia5ObterFatorMensal(indexador, competenciaISO) {
+    if (indexador === 'SEM_CORRECAO') {
+        return 1.0000;
+    }
+    if (!window.BASE_INDEXADORES_ATUALIZACAO) {
+        throw new Error('Base de indexadores de atualização não carregada.');
+    }
+    var base = window.BASE_INDEXADORES_ATUALIZACAO[indexador];
+    if (!base) {
+        throw new Error('Índice "' + indexador + '" não existe na base de atualização.');
+    }
+    if (base[competenciaISO] === undefined || base[competenciaISO] === null) {
+        throw new Error(
+            'Não há índice cadastrado para "' + indexador + '" na competência ' +
+            guia5ISOParaBR(competenciaISO) + '.'
+        );
+    }
+    return base[competenciaISO];
+}
+
+// =====================================================================
+// FASE 1.8D – ESPELHO DAS DIFERENÇAS DA GUIA 4 NA GUIA 5 (MODIFICADO)
+// =====================================================================
+
+function formatarMoedaAtualizacao(valor) {
+    if (valor === null || valor === undefined || isNaN(valor)) return 'R$ 0,00';
+    return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+// =====================================================================
+// FUNÇÃO RENDERIZAR TABELA CORRIGIDA (com TOTAL e sem Índice/Critério)
+// =====================================================================
+function renderizarTabelaCorrigida(dados) {
+    var container = document.getElementById('containerTabelaDiferencas');
+    var tbody = document.getElementById('corpoDiferencasAtualizacao');
+    var status = document.getElementById('statusDiferencas');
+    var resumo = document.getElementById('resumoAtualizacao');
+    var totalOriginalEl = document.getElementById('totalOriginalAtualizacao');
+    var totalCorrigidoEl = document.getElementById('totalCorrigidoAtualizacao');
+    var totalJurosEl = document.getElementById('totalJurosAtualizacao');
+    var totalSelicEl = document.getElementById('totalSelicAtualizacao');
+
+    if (!container || !tbody) return;
+
+    tbody.innerHTML = '';
+
+    if (!dados || dados.length === 0) {
+        container.classList.add('hidden');
+        if (resumo) resumo.classList.add('hidden');
+        if (status) {
+            status.textContent = 'Nenhuma diferença importada.';
+            status.className = 'text-sm text-slate-500';
+        }
+        return;
+    }
+
+    var dadosOrdenados = dados.slice().sort(function(a, b) {
+        var aIs13 = a.competencia.indexOf('13º') === 0;
+        var bIs13 = b.competencia.indexOf('13º') === 0;
+        var aNum, bNum;
+        if (aIs13) {
+            var aAno = parseInt(a.competencia.split('/')[1], 10);
+            aNum = aAno * 100 + 13;
+        } else {
+            var aPartes = a.competencia.split('/');
+            aNum = parseInt(aPartes[1], 10) * 100 + parseInt(aPartes[0], 10);
+        }
+        if (bIs13) {
+            var bAno = parseInt(b.competencia.split('/')[1], 10);
+            bNum = bAno * 100 + 13;
+        } else {
+            var bPartes = b.competencia.split('/');
+            bNum = parseInt(bPartes[1], 10) * 100 + parseInt(bPartes[0], 10);
+        }
+        return aNum - bNum;
+    });
+
+    var totalOrig = 0;
+    var totalCorr = 0;
+    var totalJuros = 0;
+    var totalSelic = 0;
+
+    dadosOrdenados.forEach(function(item) {
+        var tr = document.createElement('tr');
+        tr.className = 'border-b border-slate-200 hover:bg-slate-50';
+        var is13 = item.competencia.indexOf('13º') === 0;
+        if (is13) tr.classList.add('linha-13');
+
+        var tdComp = document.createElement('td');
+        tdComp.className = 'p-2 font-semibold text-slate-800';
+        tdComp.textContent = item.competencia;
+        tr.appendChild(tdComp);
+
+        var tdOrig = document.createElement('td');
+        tdOrig.className = 'p-2 text-right font-mono';
+        tdOrig.textContent = formatarMoedaAtualizacao(item.diferenca);
+        if (item.diferenca < 0) tdOrig.style.color = '#dc2626';
+        else if (item.diferenca > 0) tdOrig.style.color = '#16a34a';
+        tr.appendChild(tdOrig);
+
+        // Coeficiente
+        var tdCoef = document.createElement('td');
+        tdCoef.className = 'p-2 text-right font-mono';
+        if (item.coeficiente !== undefined && item.coeficiente !== null) {
+            tdCoef.textContent = item.coeficiente.toFixed(8);
+        } else {
+            tdCoef.textContent = '-';
+        }
+        tr.appendChild(tdCoef);
+
+        // Valor Corrigido
+        var tdCorr = document.createElement('td');
+        tdCorr.className = 'p-2 text-right font-mono';
+        if (item.valorCorrigido !== undefined && item.valorCorrigido !== null) {
+            tdCorr.textContent = formatarMoedaAtualizacao(item.valorCorrigido);
+            if (item.valorCorrigido < 0) tdCorr.style.color = '#dc2626';
+            else if (item.valorCorrigido > 0) tdCorr.style.color = '#16a34a';
+            totalOrig += item.diferenca;
+            totalCorr += item.valorCorrigido;
+        } else {
+            tdCorr.textContent = '-';
+        }
+        tr.appendChild(tdCorr);
+
+        // % Juros antes da SELIC
+        var tdJurosAntes = document.createElement('td');
+        tdJurosAntes.className = 'p-2 text-right font-mono';
+        tdJurosAntes.textContent = formatarPercentualAtualizacao(item.percentualJurosAntesSelic);
+        tr.appendChild(tdJurosAntes);
+
+        // Taxa Legal (acumulada)
+        var taxaLegalAcumulado = 0;
+        if (item.detalhamentoJuros && Array.isArray(item.detalhamentoJuros)) {
+            var compAtualNum = guia5ISOParaNumero(item.competenciaISO);
+            var dataAtualizacaoISO =
+                window.resultadosAtualizacao &&
+                window.resultadosAtualizacao.dataAtualizacaoISO
+                    ? window.resultadosAtualizacao.dataAtualizacaoISO
+                    : null;
+            for (var k = 0; k < item.detalhamentoJuros.length; k++) {
+                var entry = item.detalhamentoJuros[k];
+                if (
+                    dataAtualizacaoISO &&
+                    entry.competenciaISO === dataAtualizacaoISO
+                ) {
+                    continue;
+                }
+                var entryNum = guia5ISOParaNumero(entry.competenciaISO);
+                if ((entry.indice === 'TAXA_LEGAL' || entry.indice === 'TAXA_LEGAL_PREVIDENCIARIA') &&
+                    entryNum >= compAtualNum) {
+                    taxaLegalAcumulado += entry.taxaPercentual;
+                }
+            }
+        }
+        var tdTaxaLegal = document.createElement('td');
+        tdTaxaLegal.className = 'p-2 text-right font-mono';
+        if (taxaLegalAcumulado !== 0) {
+            tdTaxaLegal.textContent = formatarPercentualAtualizacao(taxaLegalAcumulado);
+        } else {
+            tdTaxaLegal.textContent = '-';
+        }
+        tr.appendChild(tdTaxaLegal);
+
+        // % Juros total
+        var tdJurosTotal = document.createElement('td');
+        tdJurosTotal.className = 'p-2 text-right font-mono';
+        tdJurosTotal.textContent = formatarPercentualAtualizacao(item.percentualJurosTotal);
+        tr.appendChild(tdJurosTotal);
+
+        // Juros de Mora (R$)
+        var tdJurosValor = document.createElement('td');
+        tdJurosValor.className = 'p-2 text-right font-mono';
+        if (item.valorJuros !== undefined && item.valorJuros !== null) {
+            tdJurosValor.textContent = formatarMoedaAtualizacao(item.valorJuros);
+            if (item.valorJuros < 0) tdJurosValor.style.color = '#dc2626';
+            else if (item.valorJuros > 0) tdJurosValor.style.color = '#16a34a';
+            else tdJurosValor.style.color = 'inherit';
+            totalJuros += item.valorJuros;
+        } else {
+            tdJurosValor.textContent = 'R$ 0,00';
+        }
+        tr.appendChild(tdJurosValor);
+
+        // % SELIC
+        var tdSelicPercent = document.createElement('td');
+        tdSelicPercent.className = 'p-2 text-right font-mono';
+        tdSelicPercent.textContent = formatarPercentualAtualizacao(item.percentualSelic);
+        tr.appendChild(tdSelicPercent);
+
+        // SELIC (R$)
+        var tdSelicValor = document.createElement('td');
+        tdSelicValor.className = 'p-2 text-right font-mono';
+        if (item.valorSelic !== undefined && item.valorSelic !== null) {
+            tdSelicValor.textContent = formatarMoedaAtualizacao(item.valorSelic);
+            if (item.valorSelic < 0) tdSelicValor.style.color = '#dc2626';
+            else if (item.valorSelic > 0) tdSelicValor.style.color = '#16a34a';
+            else tdSelicValor.style.color = 'inherit';
+            totalSelic += item.valorSelic;
+        } else {
+            tdSelicValor.textContent = 'R$ 0,00';
+        }
+        tr.appendChild(tdSelicValor);
+
+        // TOTAL (Corrigido + Juros + SELIC)
+        var tdTotal = document.createElement('td');
+        tdTotal.className = 'p-2 text-right font-mono text-blue-800';
+        var total = (item.valorCorrigido || 0) + (item.valorJuros || 0) + (item.valorSelic || 0);
+        tdTotal.textContent = formatarMoedaAtualizacao(total);
+        if (total < 0) tdTotal.style.color = '#dc2626';
+        else if (total > 0) tdTotal.style.color = '#16a34a';
+        tr.appendChild(tdTotal);
+
+        tbody.appendChild(tr);
+    });
+
+    // Atualizar totais no resumo
+    if (totalOriginalEl) totalOriginalEl.textContent = formatarMoedaAtualizacao(totalOrig);
+    if (totalCorrigidoEl) totalCorrigidoEl.textContent = formatarMoedaAtualizacao(totalCorr);
+    if (totalJurosEl) totalJurosEl.textContent = formatarMoedaAtualizacao(totalJuros);
+    if (totalSelicEl) totalSelicEl.textContent = formatarMoedaAtualizacao(totalSelic);
+
+    // Total Geral Atualizado
+    var totalGeralEl = document.getElementById('totalGeralAtualizacao');
+    if (!totalGeralEl) {
+        totalGeralEl = document.createElement('div');
+        totalGeralEl.id = 'totalGeralAtualizacao';
+        totalGeralEl.className = 'font-bold text-purple-800 text-base mt-2';
+        var resumoDiv = document.getElementById('resumoAtualizacao');
+        if (resumoDiv) {
+            resumoDiv.appendChild(totalGeralEl);
+        }
+    }
+    var totalGeral = totalCorr + totalJuros + totalSelic;
+    totalGeralEl.textContent = 'Total Geral Atualizado: ' + formatarMoedaAtualizacao(totalGeral);
+
+    container.classList.remove('hidden');
+    if (resumo) {
+        if (totalCorr !== 0 || totalOrig !== 0 || totalJuros !== 0 || totalSelic !== 0) {
+            resumo.classList.remove('hidden');
+        } else {
+            resumo.classList.add('hidden');
+        }
+    }
+
+    if (status) {
+        status.textContent = '✅ ' + dados.length + ' diferença(s) importada(s) da Guia 4.';
+        status.className = 'text-sm text-green-700';
+    }
+    atualizarBotoesAtualizacao();
+}
+
+function importarDiferencasGuia4ParaAtualizacao() {
+    var status = document.getElementById('statusDiferencas');
+    var tipoAcao = document.getElementById('tipoAcao')?.value || 'previdenciaria';
+    var dados;
+
+    if (tipoAcao === 'condenatoria' && window.contadjusAcoesGerais) {
+        dados = coletarDiferencasParaAtualizacao();
+    } else {
+        var rows = document.querySelectorAll('#corpoDiferencas tr');
+        if (rows.length === 0 || (rows.length === 1 && rows[0].textContent.indexOf('Nenhuma diferença') !== -1)) {
+            limparDiferencasAtualizacao('⚠️ Nenhuma diferença encontrada. Calcule a Guia 4 antes de importar.');
+            return;
+        }
+        dados = coletarDiferencasParaAtualizacao();
+    }
+
+    if (!dados || dados.length === 0) {
+        limparDiferencasAtualizacao('⚠️ Nenhuma diferença com valor válido encontrada.');
+        return;
+    }
+
+    window.diferencasAtualizacaoAtual = dados;
+    var dadosTabela = dados.map(function(item) {
+        return {
+            competencia: item.competencia,
+            diferenca: item.diferenca,
+            criterio: null,
+            coeficiente: null,
+            valorCorrigido: null
+        };
+    });
+    renderizarTabelaCorrigida(dadosTabela);
+    if (status) {
+        status.textContent = '✅ ' + dados.length + ' diferença(s) importada(s) da Guia 4.';
+        status.className = 'text-sm text-green-700';
+    }
+    atualizarBotoesAtualizacao();
+}
+
+function atualizarBotoesAtualizacao() {
+    var btnCalc = document.getElementById('btnCalcularAtualizacao');
+    if (btnCalc) {
+        var temDiferencas = window.diferencasAtualizacaoAtual && window.diferencasAtualizacaoAtual.length > 0;
+        var temParametros = !!window.parametrosCorrecaoAtual;
+        btnCalc.disabled = !(temDiferencas && temParametros);
+    }
+}
+
+// =====================================================================
+// ENCADEAMENTOS OFICIAIS (Fase 1.8F-E1) – 4 MODELOS COMPLETOS
+// =====================================================================
+const ENCADEAMENTOS_OFICIAIS = {
+    'MC-PREVID-2026': {
+        nome: 'MC-PREVID-2026',
+        descricao: 'Manual de Cálculos Previdenciários 2026',
+        correcao: {
+            periodos: [
+                { indice: 'IPC_R', inicio: '07/1994', fim: '06/1995' },
+                { indice: 'INPC', inicio: '07/1995', fim: '04/1996' },
+                { indice: 'IGPDI', inicio: '05/1996', fim: '07/1996' },
+                { indice: 'SEM_CORRECAO', inicio: '08/1996', fim: '08/1996' },
+                { indice: 'IGPDI', inicio: '09/1996', fim: '08/2006' },
+                { indice: 'INPC', inicio: '09/2006', fim: '11/2021' },
+                { indice: 'SEM_CORRECAO', inicio: '12/2021', fim: '08/2025' },
+                { indice: 'INPC', inicio: '09/2025', fim: '' }
+            ]
+        },
+        juros: {
+            // Manual CJF 2026 — Benefícios previdenciários (item 4.3.2):
+            // até 06/2009 = 1% a.m. simples;
+            // 07/2009–04/2012 = 0,5% a.m. simples;
+            // 05/2012–11/2021 = remuneração da poupança simples.
+            // De 12/2021–08/2025 a SELIC é tratada no bloco SELIC;
+            // a partir de 09/2025, a taxa legal previdenciária é tratada
+            // no bloco de juros e aplicada à própria competência.
+            periodos: [
+                { indice: 'JUROS_1_AM', inicio: '07/1994', fim: '06/2009' },
+                { indice: 'JUROS_05_AM', inicio: '07/2009', fim: '04/2012' },
+                { indice: 'JUROS_POUPANCA', inicio: '05/2012', fim: '11/2021' },
+                { indice: 'TAXA_LEGAL_PREVIDENCIARIA', inicio: '09/2025', fim: '' }
+            ]
+        },
+        selic: {
+            periodos: [
+                { indice: 'SELIC', inicio: '12/2021', fim: '08/2025' }
+            ]
+        }
+    },
+    'MC-ACOES-GERAL-2026': {
+        nome: 'MC-ACOES-GERAL-2026',
+        descricao: 'Manual de Cálculos para Ações em Geral 2026',
+        correcao: {
+            periodos: [
+                { indice: 'UFIR', inicio: '07/1994', fim: '11/2000' },
+                { indice: 'IPCAE_CJF_2000', inicio: '12/2000', fim: '12/2000' },
+                { indice: 'IPCAE', inicio: '01/2001', fim: '11/2021' },
+                { indice: 'SEM_CORRECAO', inicio: '12/2021', fim: '08/2025' },
+                { indice: 'IPCAE', inicio: '09/2025', fim: '' }
+            ]
+        },
+        juros: {
+            periodos: [
+                // Fazenda Pública — MC-AÇÕES-GERAL-2026
+                // A SELIC possui bloco próprio; por isso, nos períodos
+                // em que ela incide, o bloco de juros de mora fica SEM_JUROS.
+                { indice: 'JUROS_05_AM', inicio: '07/1994', fim: '12/2002' },
+                { indice: 'JUROS_05_AM', inicio: '01/2003', fim: '06/2009' },
+                { indice: 'JUROS_05_AM', inicio: '07/2009', fim: '04/2012' },
+                { indice: 'JUROS_POUPANCA', inicio: '05/2012', fim: '11/2021' },
+                { indice: 'SEM_JUROS', inicio: '12/2021', fim: '08/2025' },
+                { indice: 'TAXA_LEGAL', inicio: '09/2025', fim: '' }
+            ]
+        },
+        selic: {
+            periodos: [
+                { indice: 'SELIC', inicio: '12/2021', fim: '08/2025' }
+            ]
+        }
+    },
+    'MC-ACOES-GERAL-2026-SELIC': {
+        nome: 'MC GERAL 2026 – SELIC',
+        descricao: 'Alternativa com aplicação da SELIC como juros de mora entre 01/2003 e 06/2009.',
+        correcao: {
+            periodos: [
+                { indice: 'UFIR', inicio: '07/1994', fim: '11/2000' },
+                { indice: 'IPCAE_CJF_2000', inicio: '12/2000', fim: '12/2000' },
+                { indice: 'IPCAE', inicio: '01/2001', fim: '12/2002' },
+                { indice: 'SEM_CORRECAO', inicio: '01/2003', fim: '06/2009' },
+                { indice: 'IPCAE', inicio: '07/2009', fim: '11/2021' },
+                { indice: 'SEM_CORRECAO', inicio: '12/2021', fim: '08/2025' },
+                { indice: 'IPCAE', inicio: '09/2025', fim: '' }
+            ]
+        },
+        juros: {
+            periodos: [
+                { indice: 'JUROS_05_AM', inicio: '07/1994', fim: '12/2002' },
+                { indice: 'SELIC', inicio: '01/2003', fim: '06/2009' },
+                { indice: 'JUROS_05_AM', inicio: '07/2009', fim: '04/2012' },
+                { indice: 'JUROS_POUPANCA', inicio: '05/2012', fim: '11/2021' },
+                { indice: 'SEM_JUROS', inicio: '12/2021', fim: '08/2025' },
+                { indice: 'TAXA_LEGAL', inicio: '09/2025', fim: '' }
+            ]
+        },
+        selic: {
+            periodos: [
+                { indice: 'SELIC', inicio: '12/2021', fim: '08/2025' }
+            ]
+        }
+    },
+    'MC-PREVID-2022': {
+        nome: 'MC-PREVID-2022',
+        descricao: 'Manual de Cálculos Previdenciários 2022',
+        correcao: {
+            periodos: [
+                { indice: 'ORTN', inicio: '10/1964', fim: '02/1986' },
+                { indice: 'OTN', inicio: '03/1986', fim: '01/1989' },
+                { indice: 'IPC_IBGE_EXPURGOS', inicio: '01/1989', fim: '02/1989' },
+                { indice: 'BTN', inicio: '03/1989', fim: '03/1990' },
+                { indice: 'IPC_IBGE', inicio: '03/1990', fim: '02/1991' },
+                { indice: 'INPC', inicio: '03/1991', fim: '12/1992' },
+                { indice: 'IRSM', inicio: '01/1993', fim: '02/1994' },
+                { indice: 'URV', inicio: '03/1994', fim: '06/1994' },
+                { indice: 'IPC_R', inicio: '07/1994', fim: '06/1995' },
+                { indice: 'INPC', inicio: '07/1995', fim: '04/1996' },
+                { indice: 'IGPDI', inicio: '05/1996', fim: '08/2006' },
+                { indice: 'INPC', inicio: '09/2006', fim: '11/2021' },
+                { indice: 'SEM_CORRECAO', inicio: '12/2021', fim: '' }
+            ]
+        },
+        juros: {
+            // Manual CJF 2022 — Benefícios previdenciários (item 4.3.2):
+            // até 06/2009 = 1% a.m. simples;
+            // 07/2009–04/2012 = 0,5% a.m. simples;
+            // 05/2012–11/2021 = remuneração da poupança simples.
+            // A partir de 12/2021 a SELIC é tratada no bloco SELIC.
+            periodos: [
+                { indice: 'JUROS_1_AM', inicio: '07/1994', fim: '06/2009' },
+                { indice: 'JUROS_05_AM', inicio: '07/2009', fim: '04/2012' },
+                { indice: 'JUROS_POUPANCA', inicio: '05/2012', fim: '11/2021' }
+            ]
+        },
+        selic: {
+            periodos: [
+                { indice: 'SELIC', inicio: '12/2021', fim: '' }
+            ]
+        }
+    },
+    'MC-ACOES-GERAL-2022': {
+        nome: 'MC-ACOES-GERAL-2022',
+        descricao: 'Manual de Cálculos para Ações em Geral 2022',
+        correcao: {
+            periodos: [
+                { indice: 'ORTN', inicio: '10/1964', fim: '02/1986' },
+                { indice: 'OTN', inicio: '03/1986', fim: '01/1989' },
+                { indice: 'IPC_IBGE_EXPURGOS', inicio: '01/1989', fim: '02/1989' },
+                { indice: 'BTN', inicio: '03/1989', fim: '03/1990' },
+                { indice: 'IPC_IBGE', inicio: '03/1990', fim: '02/1991' },
+                { indice: 'INPC', inicio: '03/1991', fim: '11/1991' },
+                { indice: 'IPCAE', inicio: '12/1991', fim: '12/1991' },
+                { indice: 'UFIR', inicio: '01/1992', fim: '12/2000' },
+                { indice: 'IPCAE', inicio: '01/2001', fim: '11/2021' },
+                { indice: 'SEM_CORRECAO', inicio: '01/2022', fim: '' }
+            ]
+        },
+        juros: {
+            // Manual CJF 2022 — Ações em Geral / Fazenda Pública (item 4.2.2):
+            // até 12/2002 = 0,5% a.m. simples;
+            // 01/2003–06/2009 = 0,5% a.m. simples;
+            // 07/2009–04/2012 = 0,5% a.m. simples;
+            // 05/2012–11/2021 = remuneração da poupança simples.
+            // O encadeamento é mantido desde 07/1994, limite histórico usado pela Guia 5.
+            periodos: [
+                { indice: 'JUROS_05_AM', inicio: '07/1994', fim: '12/2002' },
+                { indice: 'JUROS_05_AM', inicio: '01/2003', fim: '06/2009' },
+                { indice: 'JUROS_05_AM', inicio: '07/2009', fim: '04/2012' },
+                { indice: 'JUROS_POUPANCA', inicio: '05/2012', fim: '11/2021' }
+            ]
+        },
+        selic: {
+            periodos: [
+                { indice: 'SELIC', inicio: '12/2021', fim: '' }
+            ]
+        }
+    }
+};
+
+// =====================================================================
+// AUXILIARES PARA ATALHOS OFICIAIS (Fase 1.8F-E1)
+// =====================================================================
+
+function obterCompetenciaInicialEfetiva() {
+    var competencias = [];
+
+    if (window.diferencasAtualizacaoAtual && window.diferencasAtualizacaoAtual.length > 0) {
+        window.diferencasAtualizacaoAtual.forEach(function(item) {
+            if (item && item.competencia) {
+                competencias.push(item.competencia);
+            }
+        });
+    }
+
+    var termoInput = document.getElementById('termoInicialDiferencas');
+    if (termoInput && termoInput.value) {
+        competencias.push(termoInput.value.trim());
+    }
+
+    if (competencias.length === 0) {
+        return null;
+    }
+
+    var competenciasNormalizadas = competencias.map(function(comp) {
+        comp = comp.trim();
+        var partes = comp.split('/');
+        if (partes.length === 3) {
+            return partes[1] + '/' + partes[2];
+        } else if (partes.length === 2) {
+            if (partes[1].length === 2) {
+                return comp;
+            }
+            return comp;
+        }
+        return comp;
+    });
+
+    var validas = competenciasNormalizadas.filter(function(c) {
+        return /^\d{2}\/\d{4}$/.test(c);
+    });
+
+    if (validas.length === 0) {
+        return null;
+    }
+
+    var menor = validas.reduce(function(a, b) {
+        var numA = adminCompetenciaParaNumero(a);
+        var numB = adminCompetenciaParaNumero(b);
+        return (numA <= numB) ? a : b;
+    });
+
+    return menor;
+}
+
+function filtrarEAjustarPeriodos(periodos, competenciaInicial) {
+    if (!periodos || periodos.length === 0 || !competenciaInicial) {
+        return periodos;
+    }
+    var numInicial = adminCompetenciaParaNumero(competenciaInicial);
+    if (isNaN(numInicial)) {
+        return periodos;
+    }
+
+    var copia = periodos.map(function(p) {
+        return { indice: p.indice, inicio: p.inicio, fim: p.fim || '' };
+    });
+
+    var filtrados = copia.filter(function(p) {
+        if (!p.fim || p.fim.trim() === '') return true;
+        var numFim = adminCompetenciaParaNumero(p.fim);
+        if (isNaN(numFim)) return true;
+        return numFim >= numInicial;
+    });
+
+    if (filtrados.length === 0) {
+        return [];
+    }
+
+    var primeiro = filtrados[0];
+    var numInicio = adminCompetenciaParaNumero(primeiro.inicio);
+    if (numInicio < numInicial) {
+        primeiro.inicio = competenciaInicial;
+    }
+
+    return filtrados;
+}
+
+function carregarEncadeamentoOficial(nome) {
+    var enc = ENCADEAMENTOS_OFICIAIS[nome];
+    if (!enc) {
+        adminExibirMensagemGuia5('Encadeamento oficial "' + nome + '" não encontrado.', 'error', 'correcao_monetaria');
+        return;
+    }
+
+    // Os encadeamentos oficiais são históricos e devem ser carregados integralmente.
+    // A competência inicial do caso é usada pelo motor no momento do cálculo;
+    // ela não deve mutilar o encadeamento nem alterar sua vigência oficial.
+    var periodosCorrecao = enc.correcao.periodos.map(function(p) {
+        return { indice: p.indice, inicio: p.inicio, fim: p.fim || '' };
+    });
+    var jsonCorrecao = {
+        tipoArquivo: 'parametros_atualizacao',
+        tipoParametro: 'correcao_monetaria',
+        nome: enc.nome,
+        descricao: enc.descricao,
+        periodos: periodosCorrecao
+    };
+    window.parametrosCorrecaoAtual = jsonCorrecao;
+    adminAtualizarStatusDetalhado('correcao_monetaria', jsonCorrecao, '✅ Correção carregada: ' + nome);
+
+    var periodosJuros = enc.juros ? enc.juros.periodos.map(function(p) {
+        return { indice: p.indice, inicio: p.inicio, fim: p.fim || '' };
+    }) : [];
+    var periodosSelic = enc.selic ? enc.selic.periodos.map(function(p) {
+        return { indice: p.indice, inicio: p.inicio, fim: p.fim || '' };
+    }) : [];
+
+    var pacoteJurosSelic = {
+        nome: enc.nome + ' (Juros/SELIC)',
+        descricao: enc.descricao,
+        juros: (periodosJuros.length > 0) ? { tipoParametro: 'juros_mora', periodos: periodosJuros } : null,
+        selic: (periodosSelic.length > 0) ? { tipoParametro: 'selic', periodos: periodosSelic } : null
+    };
+    window.parametrosJurosAtual = pacoteJurosSelic.juros;
+    window.parametrosSelicAtual = pacoteJurosSelic.selic;
+    adminAtualizarStatusDetalhado('juros_selic', pacoteJurosSelic, '✅ Juros e SELIC carregados: ' + nome);
+
+    limparResultadosAtualizacaoPreservandoDiferencas();
+    atualizarBotoesAtualizacao();
+    atualizarEncadeamentosVisuais();
+}
+
+// =====================================================================
+// SINCRONIZAÇÃO DAS DATAS DA GUIA 1 PARA GUIA 5
+// =====================================================================
+
+function sincronizarParametrosAtualizacao() {
+    var dataAtualizacao1 = document.getElementById('dataAtualizacao');
+    var dataAtualizacao2 = document.getElementById('dataAtualizacao2');
+    var inicioJuros1 = document.getElementById('inicioJuros');
+    var inicioJuros2 = document.getElementById('inicioJuros2');
+
+    // Na entrada da Guia 5, os parâmetros de referência da Guia 1 são a fonte
+    // oficial. A sincronização ocorre ao entrar na guia e também quando o
+    // usuário altera os campos correspondentes na Guia 1.
+    if (dataAtualizacao1 && dataAtualizacao2 && dataAtualizacao1.value) {
+        dataAtualizacao2.value = dataAtualizacao1.value;
+    }
+    if (inicioJuros1 && inicioJuros2 && inicioJuros1.value) {
+        inicioJuros2.value = inicioJuros1.value;
+    }
+}
+
+function configurarSincronizacaoDatasAtualizacao() {
+    var dataAtualizacao1 = document.getElementById('dataAtualizacao');
+    var inicioJuros1 = document.getElementById('inicioJuros');
+
+    if (dataAtualizacao1 && !dataAtualizacao1.dataset.guia5Sync) {
+        dataAtualizacao1.dataset.guia5Sync = '1';
+        dataAtualizacao1.addEventListener('input', function() {
+            var destino = document.getElementById('dataAtualizacao2');
+            if (destino) destino.value = this.value;
+        });
+        dataAtualizacao1.addEventListener('change', function() {
+            var destino = document.getElementById('dataAtualizacao2');
+            if (destino) destino.value = this.value;
+        });
+    }
+
+    if (inicioJuros1 && !inicioJuros1.dataset.guia5Sync) {
+        inicioJuros1.dataset.guia5Sync = '1';
+        inicioJuros1.addEventListener('input', function() {
+            var destino = document.getElementById('inicioJuros2');
+            if (destino) destino.value = this.value;
+        });
+        inicioJuros1.addEventListener('change', function() {
+            var destino = document.getElementById('inicioJuros2');
+            if (destino) destino.value = this.value;
+        });
+    }
+}
+
+// =====================================================================
+// FUNÇÃO PRINCIPAL DE CÁLCULO DA ATUALIZAÇÃO (Fase 1.8E)
+// =====================================================================
+
+function calcularAtualizacaoGuia5() {
+    var status = document.getElementById('statusAtualizacao');
+    var container = document.getElementById('containerTabelaDiferencas');
+    var tbody = document.getElementById('corpoDiferencasAtualizacao');
+    var totalOriginalEl = document.getElementById('totalOriginalAtualizacao');
+    var totalCorrigidoEl = document.getElementById('totalCorrigidoAtualizacao');
+    var totalJurosEl = document.getElementById('totalJurosAtualizacao');
+    var totalSelicEl = document.getElementById('totalSelicAtualizacao');
+    var resumo = document.getElementById('resumoAtualizacao');
+
+    if (status) {
+        status.textContent = 'Calculando atualização...';
+        status.className = 'text-sm text-slate-500';
+    }
+
+    if (!window.diferencasAtualizacaoAtual || window.diferencasAtualizacaoAtual.length === 0) {
+        if (status) {
+            status.textContent = '⚠️ Importe as diferenças da Guia 4 antes de calcular.';
+            status.className = 'text-sm text-amber-700';
+        }
+        return;
+    }
+
+    if (!window.parametrosCorrecaoAtual) {
+        if (status) {
+            status.textContent = '⚠️ Carregue um JSON de correção monetária antes de calcular.';
+            status.className = 'text-sm text-amber-700';
+        }
+        return;
+    }
+
+    var dataAtualizacaoInput = document.getElementById('dataAtualizacao2');
+    var dataAtualizacaoBR = dataAtualizacaoInput ? dataAtualizacaoInput.value.trim() : '';
+    var atualizacaoISO = guia5CompetenciaParaISO(dataAtualizacaoBR);
+    if (!atualizacaoISO) {
+        if (status) {
+            status.textContent = '⚠️ Informe uma data de atualização válida no formato MM/AAAA.';
+            status.className = 'text-sm text-amber-700';
+        }
+        return;
+    }
+    var atualizacaoNum = guia5ISOParaNumero(atualizacaoISO);
+
+    // A vigência jurídica do encadeamento pode ser aberta. O limite relevante
+    // para o cálculo é a disponibilidade efetiva das séries mensais na base.
+    var baseLimiteCalculo = obterLimiteBaseDosIndexadores(
+        window.parametrosCorrecaoAtual,
+        window.parametrosJurosAtual,
+        window.parametrosSelicAtual
+    );
+    if (baseLimiteCalculo) {
+        var numBaseLimite = adminCompetenciaParaNumero(baseLimiteCalculo.ultimaCompetencia);
+        if (!isNaN(numBaseLimite) && !isNaN(atualizacaoNum) && atualizacaoNum > numBaseLimite) {
+            if (status) {
+                status.textContent =
+                    '⚠️ A data de atualização informada (' + dataAtualizacaoBR +
+                    ') ultrapassa a base mensal disponível até ' + baseLimiteCalculo.ultimaCompetencia +
+                    '. O encadeamento permanece vigente; atualize a base de índices para calcular competências posteriores.';
+                status.className = 'text-sm text-amber-700';
+            }
+        }
+    }
+
+    // A data de atualização informada pelo usuário é sempre o termo final
+    // da atualização. A ausência de um índice para a última competência
+    // não elimina essa competência: ela permanece na tabela com coeficiente
+    // neutro (1,000000) para a correção correspondente, quando aplicável.
+    var limiteCompetenciaNum = atualizacaoNum;
+    var limiteBaseAplicado = null;
+
+    var diferencasFiltradas = [];
+    var excluidas = 0;
+    var excluidasPorBase = 0;
+    for (var i = 0; i < window.diferencasAtualizacaoAtual.length; i++) {
+        var item = window.diferencasAtualizacaoAtual[i];
+        var competenciaISO = guia5CompetenciaParaISO(item.competencia);
+        if (!competenciaISO) {
+            window.resultadosAtualizacao = null;
+            if (resumo) resumo.classList.add('hidden');
+            if (container) container.classList.add('hidden');
+            if (totalOriginalEl) totalOriginalEl.textContent = 'R$ 0,00';
+            if (totalCorrigidoEl) totalCorrigidoEl.textContent = 'R$ 0,00';
+            if (totalJurosEl) totalJurosEl.textContent = 'R$ 0,00';
+            if (totalSelicEl) totalSelicEl.textContent = 'R$ 0,00';
+            if (status) {
+                status.textContent = '❌ Erro na atualização: Competência inválida: ' + item.competencia;
+                status.className = 'text-sm text-red-700';
+            }
+            return;
+        }
+        var numCompetenciaItem = guia5ISOParaNumero(competenciaISO);
+        if (numCompetenciaItem <= limiteCompetenciaNum) {
+            diferencasFiltradas.push(item);
+        } else {
+            excluidas++;
+            if (limiteBaseAplicado && numCompetenciaItem > adminCompetenciaParaNumero(limiteBaseAplicado)) {
+                excluidasPorBase++;
+            }
+        }
+    }
+
+    if (diferencasFiltradas.length === 0) {
+        window.resultadosAtualizacao = null;
+        if (resumo) resumo.classList.add('hidden');
+        if (container) container.classList.add('hidden');
+        if (totalOriginalEl) totalOriginalEl.textContent = 'R$ 0,00';
+        if (totalCorrigidoEl) totalCorrigidoEl.textContent = 'R$ 0,00';
+        if (totalJurosEl) totalJurosEl.textContent = 'R$ 0,00';
+        if (totalSelicEl) totalSelicEl.textContent = 'R$ 0,00';
+        if (status) {
+            status.textContent = '❌ Nenhuma parcela possui competência igual ou anterior à Data de Atualização.';
+            status.className = 'text-sm text-red-700';
+        }
+        return;
+    }
+
+    var inicioJurosBR = '';
+    var inicioJurosISO = null;
+    if (window.parametrosJurosAtual) {
+        var inicioJurosInput = document.getElementById('inicioJuros2');
+        inicioJurosBR = inicioJurosInput ? inicioJurosInput.value.trim() : '';
+        inicioJurosISO = guia5CompetenciaParaISO(inicioJurosBR);
+        if (!inicioJurosISO) {
+            if (status) {
+                status.textContent = '⚠️ Informe um Início dos Juros válido no formato MM/AAAA.';
+                status.className = 'text-sm text-amber-700';
+            }
+            return;
+        }
+    }
+
+    try {
+        var totalOriginal = 0;
+        var totalCorrigido = 0;
+        var totalJuros = 0;
+        var totalSelic = 0;
+        var resultados = [];
+
+        for (var idx = 0; idx < diferencasFiltradas.length; idx++) {
+            var item = diferencasFiltradas[idx];
+            var competenciaISO = guia5CompetenciaParaISO(item.competencia);
+            if (!competenciaISO) {
+                throw new Error('Competência inválida: ' + item.competencia);
+            }
+
+            var resultadoCoef = guia5CalcularCoeficienteMensal(
+                competenciaISO,
+                atualizacaoISO,
+                window.parametrosCorrecaoAtual
+            );
+
+            var diferencaOriginal = item.diferenca || 0;
+            // Regra de piso: índice acumulado inferior a 1,00 conta para a
+            // composição do coeficiente e para competências posteriores, mas
+            // não pode reduzir o valor da própria parcela abaixo do original.
+            var valorCorrigidoCalculado = diferencaOriginal * resultadoCoef.coeficiente;
+            var valorCorrigido = resultadoCoef.coeficiente < 1
+                ? Math.max(diferencaOriginal, valorCorrigidoCalculado)
+                : valorCorrigidoCalculado;
+
+            totalOriginal += diferencaOriginal;
+            totalCorrigido += valorCorrigido;
+
+            var obj = {
+                competencia: item.competencia,
+                competenciaISO: competenciaISO,
+                diferenca: diferencaOriginal,
+                criterio: resultadoCoef.criterio,
+                coeficiente: resultadoCoef.coeficiente,
+                valorCorrigido: valorCorrigido,
+                detalhamentoJuros: []
+            };
+
+            var valorJurosAntesSelic = 0;
+            var percentualJurosTotal = 0;
+            var valorJurosTotal = 0;
+            var criteriosJuros = [];
+            var mesesJuros = 0;
+            var detalhamentoJuros = [];
+
+            if (window.parametrosSelicAtual) {
+                var periodosSelic = window.parametrosSelicAtual.periodos;
+                if (!periodosSelic || periodosSelic.length === 0) {
+                    throw new Error('Encadeamento SELIC vazio.');
+                }
+                var primeiroPeriodo = periodosSelic[0];
+                var inicioSelicISO = guia5CompetenciaParaISO(primeiroPeriodo.inicio);
+                if (!inicioSelicISO) throw new Error('Início do primeiro período SELIC inválido.');
+                var inicioSelicNum = guia5ISOParaNumero(inicioSelicISO);
+                var compNum = guia5ISOParaNumero(obj.competenciaISO);
+                var inicioEfetivoNum = Math.max(compNum, inicioSelicNum);
+                var inicioEfetivoISO = String(Math.floor(inicioEfetivoNum / 100)) + '-' + String(inicioEfetivoNum % 100).padStart(2, '0');
+
+                var mes = inicioEfetivoNum % 100;
+                var ano = Math.floor(inicioEfetivoNum / 100);
+                if (mes > 1) {
+                    mes--;
+                } else {
+                    mes = 12;
+                    ano--;
+                }
+                var fimPreSelicNum = ano * 100 + mes;
+                var fimPreSelicISO = String(ano) + '-' + String(mes).padStart(2, '0');
+
+                var inicioJurosNum = guia5ISOParaNumero(inicioJurosISO);
+                var jurosPre = null;
+                if (fimPreSelicNum >= Math.max(compNum, inicioJurosNum)) {
+                    jurosPre = guia5CalcularJurosIntervalo(obj, inicioJurosISO, fimPreSelicISO, window.parametrosJurosAtual, atualizacaoISO);
+                    valorJurosAntesSelic = jurosPre.valor;
+                    percentualJurosTotal += jurosPre.percentual;
+                    valorJurosTotal += jurosPre.valor;
+                    criteriosJuros = jurosPre.criterios.slice();
+                    mesesJuros += jurosPre.meses;
+                    detalhamentoJuros = detalhamentoJuros.concat(jurosPre.detalhamento);
+                }
+
+                var cursorSelic = guia5ProximaCompetenciaISO(inicioEfetivoISO);
+                var selicObj = guia5CalcularSelic(obj, atualizacaoISO, window.parametrosSelicAtual);
+                var percentualSelic = selicObj.percentualSelic;
+                var detalhamentoSelic = selicObj.detalhamentoSelic;
+                var baseSelic = obj.valorCorrigido + valorJurosAntesSelic;
+                var valorSelic = baseSelic * percentualSelic / 100;
+
+                var ultimoPeriodo = periodosSelic[periodosSelic.length - 1];
+                var fimSelicISO = ultimoPeriodo.fim ? guia5CompetenciaParaISO(ultimoPeriodo.fim) : null;
+                if (fimSelicISO) {
+                    var proxSelic = guia5ProximaCompetenciaISO(fimSelicISO);
+                    var proxNum = guia5ISOParaNumero(proxSelic);
+                    var atualNum = guia5ISOParaNumero(atualizacaoISO);
+                    if (proxNum <= atualNum) {
+                        var jurosPos = guia5CalcularJurosIntervalo(obj, (inicioJurosISO && guia5ISOParaNumero(inicioJurosISO) > guia5ISOParaNumero(proxSelic) ? inicioJurosISO : proxSelic), atualizacaoISO, window.parametrosJurosAtual, atualizacaoISO);
+                        percentualJurosTotal += jurosPos.percentual;
+                        valorJurosTotal += jurosPos.valor;
+                        jurosPos.criterios.forEach(function(c) {
+                            if (criteriosJuros.indexOf(c) === -1) criteriosJuros.push(c);
+                        });
+                        mesesJuros += jurosPos.meses;
+                        detalhamentoJuros = detalhamentoJuros.concat(jurosPos.detalhamento);
+                    }
+                }
+
+                obj.percentualJurosAntesSelic = jurosPre ? jurosPre.percentual : 0;
+                obj.valorJurosAntesSelic = valorJurosAntesSelic;
+                obj.percentualJurosTotal = percentualJurosTotal;
+                obj.valorJuros = valorJurosTotal;
+                obj.criteriosJuros = criteriosJuros;
+                obj.quantidadeMesesJuros = mesesJuros;
+                obj.detalhamentoJuros = detalhamentoJuros;
+                obj.percentualSelic = percentualSelic;
+                obj.valorSelic = valorSelic;
+                obj.detalhamentoSelic = detalhamentoSelic;
+
+                totalJuros += valorJurosTotal;
+                totalSelic += valorSelic;
+
+            } else {
+                var jurosTotal = guia5CalcularJurosDeterministicos(obj, inicioJurosISO, atualizacaoISO, window.parametrosJurosAtual);
+                obj.percentualJurosAntesSelic = jurosTotal.percentualJurosAntesSelic;
+                obj.percentualJurosTotal = jurosTotal.percentualJurosTotal;
+                obj.valorJuros = jurosTotal.valorJuros;
+                obj.criteriosJuros = jurosTotal.criteriosJuros;
+                obj.quantidadeMesesJuros = jurosTotal.quantidadeMesesJuros;
+                obj.detalhamentoJuros = jurosTotal.detalhamentoJuros;
+                obj.percentualSelic = 0;
+                obj.valorSelic = 0;
+                obj.detalhamentoSelic = [];
+                totalJuros += obj.valorJuros;
+            }
+
+            resultados.push(obj);
+        }
+
+        window.resultadosAtualizacao = {
+            dataAtualizacao: dataAtualizacaoBR,
+            dataAtualizacaoISO: atualizacaoISO,
+            parametrosCorrecao: window.parametrosCorrecaoAtual,
+            parametrosJuros: window.parametrosJurosAtual || null,
+            parametrosSelic: window.parametrosSelicAtual || null,
+            limiteCompetenciaCalculada: dataAtualizacaoBR,
+            totalOriginal: totalOriginal,
+            totalCorrigido: totalCorrigido,
+            totalJuros: totalJuros,
+            totalSelic: totalSelic,
+            itens: resultados
+        };
+
+        renderizarTabelaCorrigida(resultados);
+
+        if (totalOriginalEl) totalOriginalEl.textContent = formatarMoedaAtualizacao(totalOriginal);
+        if (totalCorrigidoEl) totalCorrigidoEl.textContent = formatarMoedaAtualizacao(totalCorrigido);
+        if (totalJurosEl) totalJurosEl.textContent = formatarMoedaAtualizacao(totalJuros);
+        if (totalSelicEl) totalSelicEl.textContent = formatarMoedaAtualizacao(totalSelic);
+        if (resumo) resumo.classList.remove('hidden');
+
+        var msg = '✅ Atualização calculada com sucesso.';
+        if (baseLimiteCalculo && baseLimiteCalculo.ultimaCompetencia && atualizacaoNum > adminCompetenciaParaNumero(baseLimiteCalculo.ultimaCompetencia)) {
+            msg += ' A data de atualização é ' + dataAtualizacaoBR + '; não há índice disponível para competências posteriores a ' + baseLimiteCalculo.ultimaCompetencia + ', quando aplicável.';
+        }
+        if (excluidas > 0) {
+            if (limiteBaseAplicado && excluidasPorBase > 0) {
+                msg += ' ' + excluidasPorBase + ' parcela(s) posterior(es) à última competência calculável (' + limiteBaseAplicado + ') foram desconsideradas por ausência de índices oficiais disponíveis.';
+                var posterioresData = excluidas - excluidasPorBase;
+                if (posterioresData > 0) {
+                    msg += ' ' + posterioresData + ' parcela(s) posterior(es) à data da conta também foram desconsideradas.';
+                }
+            } else {
+                msg += ' ' + excluidas + ' parcela(s) posterior(es) ao limite calculável foram desconsideradas.';
+            }
+        }
+        if (status) {
+            status.textContent = msg;
+            status.className = 'text-sm text-green-700';
+        }
+
+    } catch (erro) {
+        window.resultadosAtualizacao = null;
+        if (status) {
+            status.textContent = '❌ Erro na atualização: ' + erro.message;
+            status.className = 'text-sm text-red-700';
+        }
+        if (resumo) resumo.classList.add('hidden');
+    }
+}
+
+window.calcularAtualizacaoGuia5 = calcularAtualizacaoGuia5;
+
+
+// =====================================================================
+// FASE 1.9A – GUIA 6 / RENÚNCIA – FORMAÇÃO DA DEMANDA
+// =====================================================================
+
+window.parametrosFormacaoDemanda = window.parametrosFormacaoDemanda || {
+    dataAjuizamento: '',
+    competenciaAjuizamento: '',
+    metodoVincendas: '1_parcela_anual',
+    tratamentoMesAjuizamento: 'integral',
+    incluir13: false,
+    limitarAoTeto: false,
+    quantidadeSalariosMinimos: 60,
+    acordoAtivo: false,
+    percentualAcordo: 100
+};
+
+window.resultadosAjuizamentoAtualizacao = window.resultadosAjuizamentoAtualizacao || null;
+window.resultadoAjuizamento = window.resultadoAjuizamento || null;
+
+function guia6ObterCampoDataAjuizamento() {
+    return document.getElementById('dataAjuizamentoGuia6') || document.getElementById('dataAjuizamento');
+}
+
+function guia6SincronizarDataAjuizamento(origem) {
+    var entrada = document.getElementById('dataAjuizamento');
+    var guia6 = document.getElementById('dataAjuizamentoGuia6');
+    if (!entrada || !guia6) return;
+
+    var valorEntrada = String(entrada.value || '').trim();
+    var valorGuia6 = String(guia6.value || '').trim();
+    var valor = String(origem && origem.value !== undefined ? origem.value : '').trim();
+
+    // Sem origem explícita, a Entrada é a fonte inicial. Se ela estiver vazia,
+    // preservamos o valor que já existir na Guia 6.
+    if (!valor) {
+        valor = valorEntrada || valorGuia6;
+    }
+
+    if (entrada.value !== valor) entrada.value = valor;
+    if (guia6.value !== valor) guia6.value = valor;
+
+    // Mantém o objeto global atualizado imediatamente, sem trocar de guia.
+    if (typeof guia6ColetarParametrosFormacaoDemanda === 'function') {
+        guia6ColetarParametrosFormacaoDemanda();
+    }
+}
+
+function guia6ObterCompetenciaAjuizamentoISO() {
+    var campo = guia6ObterCampoDataAjuizamento();
+    var valor = campo ? campo.value.trim() : '';
+    if (!valor) return null;
+
+    var partes = valor.split('/');
+    if (partes.length !== 3) return null;
+
+    var dia = parseInt(partes[0], 10);
+    var mes = parseInt(partes[1], 10);
+    var ano = parseInt(partes[2], 10);
+
+    if (
+        isNaN(dia) || isNaN(mes) || isNaN(ano) ||
+        dia < 1 || dia > 31 || mes < 1 || mes > 12 || ano < 1900
+    ) {
+        return null;
+    }
+
+    return String(ano) + '-' + String(mes).padStart(2, '0');
+}
+
+function obterCompetenciaAjuizamento() {
+    var iso = guia6ObterCompetenciaAjuizamentoISO();
+    if (!iso) return null;
+
+    return iso.substring(5, 7) + '/' + iso.substring(0, 4);
+}
+
+function guia6ISOParaCompetencia(iso) {
+    return iso.substring(5, 7) + '/' + iso.substring(0, 4);
+}
+
+function guia6NormalizarCompetenciaItem(competencia) {
+    if (!competencia) return null;
+
+    var valor = String(competencia).trim();
+
+    // Mantém o formato normal da Guia 5.
+    var iso = guia5CompetenciaParaISO(valor);
+    if (iso) return iso;
+
+    // Para competências de 13º, a atualização monetária é operacionalizada
+    // na competência de dezembro do respectivo ano.
+    var match13 = valor.match(/^13[º°]?\s*\/\s*(\d{4})$/i);
+    if (match13) {
+        return match13[1] + '-12';
+    }
+
+    return null;
+}
+
+function guia6CriarParametrosJurosSemJuros(competenciaISO) {
+    return {
+        versao: '1.9A',
+        criterio: 'SEM_JUROS',
+        periodos: [{
+            inicio: guia6ISOParaCompetencia(competenciaISO),
+            fim: '',
+            indice: 'SEM_JUROS'
+        }]
+    };
+}
+
+function guia6ObterParametrosEvolucao(dataFinal) {
+    var radioTransformado = document.querySelector('input[name="transformado"]:checked');
+
+    return {
+        dib: document.getElementById('dib') ? document.getElementById('dib').value : '',
+        rmi: typeof parseMoeda === 'function'
+            ? parseMoeda(document.getElementById('rmi').value)
+            : 0,
+        dataFinal: dataFinal,
+        transformado: radioTransformado ? radioTransformado.value === 'sim' : false,
+        dibAntecedente: document.getElementById('dibAnterior') ? document.getElementById('dibAnterior').value : '',
+        tipoBeneficio: document.getElementById('tipoBeneficio') ? document.getElementById('tipoBeneficio').value : 'previdenciario',
+        percentualDesdobramento: parseFloat(
+            (document.getElementById('percentualDesdobramento') ? document.getElementById('percentualDesdobramento').value : '100')
+                .replace(',', '.')
+        ) || 100,
+        adicionalTipo: document.getElementById('adicionalRenda') ? document.getElementById('adicionalRenda').value : '0',
+        adicionalPercentual: parseFloat(
+            (document.getElementById('adicionalPercentual') ? document.getElementById('adicionalPercentual').value : '0')
+                .replace(',', '.')
+        ) || 0,
+        baseadoSalarioMinimo: !!(
+            document.getElementById('baseadoSalarioMinimoDevido') &&
+            document.getElementById('baseadoSalarioMinimoDevido').checked
+        )
+    };
+}
+
+function guia6CalcularFracaoRemanescente(dataAjuizamento) {
+    var partes = String(dataAjuizamento).split('/');
+    var dia = parseInt(partes[0], 10);
+    if (isNaN(dia) || dia < 1 || dia > 31) return 0;
+
+    // Convenção de mês comercial de 30 dias.
+    // O dia do ajuizamento integra as parcelas vencidas. Assim, a parte
+    // vincenda começa no dia seguinte ao ajuizamento.
+    // Ex.: ajuizamento em 01/01 -> 1/30 vencido e 29/30 vincendo.
+    // Ex.: ajuizamento em 25/08 -> 25/30 vencido e 5/30 vincendo.
+    var diaComercial = Math.min(dia, 30);
+    var diasRemanescentes = Math.max(0, 30 - diaComercial);
+    return diasRemanescentes / 30;
+}
+
+function guia6CalcularFracaoVencida(dataAjuizamento) {
+    var partes = String(dataAjuizamento).split('/');
+    var dia = parseInt(partes[0], 10);
+    if (isNaN(dia) || dia < 1 || dia > 31) return 0;
+
+    // O dia do ajuizamento é contado como dia vencido. Isso permite, por
+    // exemplo, que 01/01/2026 gere 1/30 da competência 01/2026 nas parcelas
+    // vencidas, quando o tratamento for proporcional.
+    var diaComercial = Math.min(dia, 30);
+    return diaComercial / 30;
+}
+
+/**
+ * Quando DIB e Ajuizamento pertencem à mesma competência, a fração da
+ * competência já não pode ser calculada aplicando simplesmente a fração
+ * do ajuizamento sobre o valor mensal da competência.
+ *
+ * A evolução já entregou para essa competência somente a fração devida
+ * desde a DIB. Portanto, a competência precisa ser repartida novamente:
+ *   vencida  = dias entre DIB e dia anterior ao ajuizamento
+ *   vincenda = dias a partir do ajuizamento até o fim do mês comercial.
+ *
+ * A convenção do projeto é de mês comercial de 30 dias.
+ */
+function guia6ObterFracaoVencidaMesDibAjuizamento(dataAjuizamento) {
+    var dibEl = document.getElementById('dib');
+    var dib = dibEl ? String(dibEl.value || '').trim() : '';
+    var aju = String(dataAjuizamento || '').trim();
+
+    var pDib = dib.split('/');
+    var pAju = aju.split('/');
+    if (pDib.length !== 3 || pAju.length !== 3) return null;
+
+    var diaDib = parseInt(pDib[0], 10);
+    var mesDib = parseInt(pDib[1], 10);
+    var anoDib = parseInt(pDib[2], 10);
+    var diaAju = parseInt(pAju[0], 10);
+    var mesAju = parseInt(pAju[1], 10);
+    var anoAju = parseInt(pAju[2], 10);
+
+    if ([diaDib, mesDib, anoDib, diaAju, mesAju, anoAju].some(isNaN)) return null;
+    if (mesDib !== mesAju || anoDib !== anoAju) return null;
+
+    // Competência ativa desde a DIB até o fim do mês comercial.
+    // O dia do ajuizamento também integra as vencidas.
+    var diasAtivos = Math.max(0, 30 - diaDib + 1);
+    var diasVencidos = Math.max(0, diaAju - diaDib + 1);
+
+    if (diasAtivos <= 0) return 0;
+    return Math.min(1, diasVencidos / diasAtivos);
+}
+
+function guia6ObterFracaoVincendaMesDibAjuizamento(dataAjuizamento) {
+    var partes = String(dataAjuizamento || '').split('/');
+    var diaAju = parseInt(partes[0], 10);
+    if (isNaN(diaAju) || diaAju < 1 || diaAju > 30) return null;
+
+    // A parte vincenda do mês do ajuizamento é calculada diretamente
+    // sobre os 30 dias da competência comercial.
+    // Ex.: ajuizamento em 25/08 -> dias 25 a 30 = 6/30.
+    // A DIB já foi considerada na parcela vencida e não deve alterar
+    // o denominador da parcela posterior ao ajuizamento.
+    return Math.max(0, 30 - diaAju) / 30;
+}
+
+function calcularAtualizacaoAteAjuizamento() {
+    var status = document.getElementById('statusFormacaoDemanda');
+    var competenciaFinalISO = guia6ObterCompetenciaAjuizamentoISO();
+
+    if (!competenciaFinalISO) {
+        throw new Error('Informe uma Data do Ajuizamento válida no formato DD/MM/AAAA.');
+    }
+
+    if (!window.diferencasAtualizacaoAtual || !window.diferencasAtualizacaoAtual.length) {
+        throw new Error('Importe as diferenças da Guia 4 antes de calcular a Formação da Demanda.');
+    }
+
+    if (!window.parametrosCorrecaoAtual) {
+        throw new Error('Carregue os parâmetros de correção monetária antes de calcular a Formação da Demanda.');
+    }
+
+    var competenciaFinalNum = guia5ISOParaNumero(competenciaFinalISO);
+
+    // GUIA 6 / RENÚNCIA: o ajuizamento continua sendo o marco para
+    // selecionar quais parcelas são vencidas. Para a atualização monetária,
+    // a última competência integral é o mês anterior ao ajuizamento.
+    // Ex.: ajuizamento em 01/2026 -> índices mensais até 12/2025.
+    // O termo final exclusivo passado ao motor é 01/2026, permitindo que
+    // 12/2025 seja efetivamente incluído no encadeamento da correção.
+    var dataBaseAtualizacaoISO = guia5AnteriorCompetenciaISO(competenciaFinalISO);
+    if (!dataBaseAtualizacaoISO) {
+        throw new Error('Não foi possível determinar o mês anterior ao ajuizamento para a atualização.');
+    }
+    var dataBaseAtualizacaoBR = guia6ISOParaCompetencia(dataBaseAtualizacaoISO);
+
+    // IMPORTANTE: a data-base mensal continua sendo o mês anterior ao
+    // ajuizamento, mas o motor de correção monetária trabalha com um termo
+    // final exclusivo. Para que o próprio mês da data-base (ex.: 12/2025,
+    // quando o ajuizamento é 01/2026) seja efetivamente incluído no
+    // encadeamento, o coeficiente deve ser calculado até a competência do
+    // ajuizamento (01/2026). O motor da Guia 5 inclui as competências
+    // menores que o termo final. Não usar 12/2025 como termo final, pois isso
+    // faria o coeficiente de 12/2025 ficar em 1,0000000000.
+    var competenciaFinalCorrecaoISO = competenciaFinalISO;
+
+    var tratamentoEl = document.getElementById('tratamentoMesAjuizamento');
+    var tratamento = tratamentoEl ? tratamentoEl.value : 'integral';
+    var proporcional = tratamento === 'proporcional';
+    var valorDataAjuizamento = (document.getElementById('dataAjuizamentoGuia6') || document.getElementById('dataAjuizamento') || {}).value || '';
+    var fracaoVencida = 1;
+    if (proporcional) {
+        fracaoVencida = guia6ObterFracaoVencidaMesDibAjuizamento(valorDataAjuizamento);
+        if (fracaoVencida === null) {
+            fracaoVencida = guia6CalcularFracaoVencida(valorDataAjuizamento);
+        }
+    }
+
+    var itens = [];
+    var totalOriginal = 0;
+    var totalCorrigido = 0;
+    var totalJuros = 0;
+    var totalSelic = 0;
+
+    var parametrosJurosSemJuros = guia6CriarParametrosJurosSemJuros(competenciaFinalISO);
+
+    window.diferencasAtualizacaoAtual.forEach(function(item) {
+        var competenciaISO = guia6NormalizarCompetenciaItem(item.competencia);
+        if (!competenciaISO) return;
+        if (guia5ISOParaNumero(competenciaISO) > competenciaFinalNum) return;
+
+        var coef = guia5CalcularCoeficienteMensal(
+            competenciaISO,
+            competenciaFinalCorrecaoISO,
+            window.parametrosCorrecaoAtual
+        );
+
+        var diferencaBase = Number(item.diferenca) || 0;
+        var ehCompetenciaAjuizamento = competenciaISO === competenciaFinalISO;
+        var fracaoAplicada = ehCompetenciaAjuizamento && proporcional ? fracaoVencida : 1;
+
+        // A competência do ajuizamento pertence às vencidas apenas na fração
+        // anterior ao ajuizamento quando o tratamento for proporcional.
+        // Para integral, ela permanece integral. Em ambos os casos, a SELIC
+        // dessa competência NÃO integra as vencidas: a atualização das
+        // vincendas é nominal e a parcela do ajuizamento não deve carregar
+        // SELIC para o lado das vencidas.
+        var diferenca = Math.round(diferencaBase * fracaoAplicada * 100) / 100;
+        var valorCorrigidoCalculado = Math.round(diferenca * coef.coeficiente * 100) / 100;
+        // O coeficiente inferior a 1,00 permanece válido para o acumulado,
+        // mas não reduz a parcela desta competência abaixo do seu original.
+        var valorCorrigido = coef.coeficiente < 1
+            ? Math.max(diferenca, valorCorrigidoCalculado)
+            : valorCorrigidoCalculado;
+
+        // Reutiliza o motor determinístico da Guia 5 com SEM_JUROS.
+        // A Guia 6 não cria um cálculo paralelo de juros: apenas fornece
+        // ao motor um encadeamento cujo único índice é SEM_JUROS.
+        var juros = guia5CalcularJurosDeterministicos(
+            {
+                competenciaISO: competenciaISO,
+                valorCorrigido: valorCorrigido
+            },
+            competenciaFinalISO,
+            competenciaFinalISO,
+            parametrosJurosSemJuros
+        );
+
+        var valorJuros = Number(juros.valorJuros) || 0;
+        var percentualJurosTotal = Number(juros.percentualJurosTotal) || 0;
+        var detalhamentoJuros = juros.detalhamentoJuros || [];
+
+        var valorSelic = 0;
+        var percentualSelic = 0;
+        var detalhamentoSelic = [];
+
+        if (!ehCompetenciaAjuizamento && window.parametrosSelicAtual) {
+            var selic = guia5CalcularSelic(
+                {
+                    competenciaISO: competenciaISO,
+                    valorCorrigido: valorCorrigido
+                },
+                dataBaseAtualizacaoISO,
+                window.parametrosSelicAtual
+            );
+            percentualSelic = Number(selic.percentualSelic) || 0;
+            valorSelic = Number(selic.valorSelic) || 0;
+            detalhamentoSelic = selic.detalhamentoSelic || [];
+        }
+
+        var total = valorCorrigido + valorJuros + valorSelic;
+
+        var resultadoItem = {
+            competencia: item.competencia,
+            competenciaISO: competenciaISO,
+            diferenca: diferenca,
+            criterio: coef.criterio,
+            coeficiente: coef.coeficiente,
+            valorCorrigido: valorCorrigido,
+            percentualJurosAntesSelic: Number(juros.percentualJurosAntesSelic) || 0,
+            percentualJurosTotal: percentualJurosTotal,
+            valorJuros: valorJuros,
+            criteriosJuros: juros.criteriosJuros || ['SEM_JUROS'],
+            quantidadeMesesJuros: Number(juros.quantidadeMesesJuros) || 0,
+            detalhamentoJuros: detalhamentoJuros,
+            percentualSelic: percentualSelic,
+            valorSelic: valorSelic,
+            detalhamentoSelic: detalhamentoSelic,
+            total: total,
+            fracaoAplicada: fracaoAplicada,
+            competenciaAjuizamento: ehCompetenciaAjuizamento
+        };
+
+        totalOriginal += diferenca;
+        totalCorrigido += valorCorrigido;
+        totalJuros += valorJuros;
+        totalSelic += valorSelic;
+        itens.push(resultadoItem);
+    });
+
+    if (!itens.length) {
+        throw new Error('Nenhuma diferença possui competência igual ou anterior ao ajuizamento.');
+    }
+
+    window.resultadosAjuizamentoAtualizacao = {
+        dataFinal: guia6ISOParaCompetencia(competenciaFinalISO),
+        competenciaFinal: competenciaFinalISO,
+        dataBaseAtualizacaoISO: dataBaseAtualizacaoISO,
+        dataBaseAtualizacao: dataBaseAtualizacaoBR,
+        tratamentoMesAjuizamento: tratamento,
+        parametrosCorrecao: window.parametrosCorrecaoAtual,
+        parametrosJuros: parametrosJurosSemJuros,
+        parametrosSelic: window.parametrosSelicAtual || null,
+        itens: itens,
+        totalOriginal: totalOriginal,
+        totalCorrigido: totalCorrigido,
+        totalJuros: 0,
+        totalSelic: totalSelic,
+        totalAtualizado: totalCorrigido + totalSelic
+    };
+
+    renderizarMemoriaAjuizamento();
+
+    if (status) {
+        status.textContent = 'Memória até o ajuizamento calculada.';
+        status.className = 'text-sm text-green-700';
+    }
+
+    return window.resultadosAjuizamentoAtualizacao;
+}
+
+function guia6ObterMemoriaEvolucaoReal() {
+    if (Array.isArray(window.memoriaEvolucaoDevida) && window.memoriaEvolucaoDevida.length) {
+        return window.memoriaEvolucaoDevida;
+    }
+    return null;
+}
+
+function guia6ObterItemMemoriaEvolucao(competenciaISO) {
+    var memoria = guia6ObterMemoriaEvolucaoReal();
+    if (!memoria) return null;
+
+    var competencia = guia6ISOParaCompetencia(competenciaISO);
+    for (var i = 0; i < memoria.length; i++) {
+        if (String(memoria[i].competencia || '').trim() === competencia) {
+            return memoria[i];
+        }
+    }
+    return null;
+}
+
+function guia6ObterValorEvolucaoNaCompetencia(competenciaISO) {
+    var competencia = guia6ISOParaCompetencia(competenciaISO);
+    var itemMemoria = guia6ObterItemMemoriaEvolucao(competenciaISO);
+
+    // A memória de evolução pode conter apenas os marcos de reajuste/piso.
+    // Quando a competência solicitada estiver nela, ela continua sendo a
+    // fonte preferencial e evita recalcular desnecessariamente.
+    if (itemMemoria) {
+        var valorMemoria = Number(itemMemoria.valorFinal);
+        if (!isNaN(valorMemoria) && valorMemoria > 0) {
+            return {
+                valor: valorMemoria,
+                resultado: {
+                    memoria: guia6ObterMemoriaEvolucaoReal(),
+                    rmaFinal: valorMemoria
+                },
+                origem: 'memoriaEvolucaoDevida'
+            };
+        }
+    }
+
+    // A ausência de uma competência na memória NÃO significa que ela seja
+    // inexistente. A memória real é esparsa (marcos de evolução), enquanto
+    // calcularEvolucao() consegue obter o valor mensal entre esses marcos.
+    if (typeof calcularEvolucao !== 'function') {
+        throw new Error('Motor de evolução não está disponível.');
+    }
+
+    var parametros = guia6ObterParametrosEvolucao(competencia);
+    var resultado = calcularEvolucao(parametros);
+
+    if (!resultado || resultado.rmaFinal === undefined || resultado.rmaFinal === null) {
+        throw new Error('Não foi possível obter o valor da evolução em ' + competencia + '.');
+    }
+
+    var valorCalculado = Number(resultado.rmaFinal);
+    if (isNaN(valorCalculado) || valorCalculado <= 0) {
+        throw new Error('A evolução calculada em ' + competencia + ' não possui valor mensal válido.');
+    }
+
+    return {
+        valor: valorCalculado,
+        resultado: resultado,
+        origem: 'calcularEvolucao'
+    };
+}
+
+function guia6ObterFimRealEvolucaoISO() {
+    // A Data Final da evolução é o marco temporal principal. A memória pode
+    // ser esparsa e conter somente os meses em que houve reajuste/piso; ela
+    // não deve encurtar artificialmente a evolução mensal.
+    var dataFinal = document.getElementById('dataFinal');
+    if (dataFinal && dataFinal.value) {
+        var isoDataFinal = guia5CompetenciaParaISO(dataFinal.value.trim());
+        if (isoDataFinal) return isoDataFinal;
+    }
+
+    // Fallback para memórias antigas que não possuam Data Final disponível.
+    var memoria = guia6ObterMemoriaEvolucaoReal();
+    if (memoria && memoria.length) {
+        var maiorISO = null;
+        var maiorNum = -Infinity;
+        for (var i = 0; i < memoria.length; i++) {
+            var isoMemoria = guia6NormalizarCompetenciaItem(memoria[i].competencia);
+            var numMemoria = guia5ISOParaNumero(isoMemoria);
+            if (isoMemoria && !isNaN(numMemoria) && numMemoria > maiorNum) {
+                maiorNum = numMemoria;
+                maiorISO = isoMemoria;
+            }
+        }
+        if (maiorISO) return maiorISO;
+    }
+
+    return null;
+}
+
+function guia6ObterMarcoCompetenciaISO(id, tratarComoFimDoMes) {
+    var el = document.getElementById(id);
+    if (!el || !el.value) return null;
+
+    var valor = el.value.trim();
+    var iso = guia5CompetenciaParaISO(valor);
+    if (!iso) {
+        var partes = valor.split('/');
+        if (partes.length === 3) {
+            var mes = parseInt(partes[1], 10);
+            var ano = parseInt(partes[2], 10);
+            if (!isNaN(mes) && !isNaN(ano) && mes >= 1 && mes <= 12) {
+                iso = String(ano) + '-' + String(mes).padStart(2, '0');
+            }
+        }
+    }
+    if (!iso) return null;
+
+    return iso;
+}
+
+function guia6CompetenciaDentroDaEvolucao(competenciaISO) {
+    var competenciaNum = guia5ISOParaNumero(competenciaISO);
+    if (isNaN(competenciaNum)) return false;
+
+    // Na Formação da Demanda, a DIP NÃO delimita a existência da vincenda.
+    // Ela pode alterar o valor da diferença (por exemplo, pela existência de
+    // benefício recebido a partir da DIP), mas a competência posterior ao
+    // ajuizamento continua pertencendo ao período das vincendas.
+    //
+    // O limite final da competência é dado pela DCB do benefício devido,
+    // quando existente, e pelo fim real da evolução.
+    var dcbISO = guia6ObterMarcoCompetenciaISO('dcbDevido', true);
+    if (dcbISO && competenciaNum > guia5ISOParaNumero(dcbISO)) {
+        return false;
+    }
+
+    var fimISO = guia6ObterFimRealEvolucaoISO();
+    if (!fimISO) return false;
+
+    // A competência precisa estar dentro do período efetivamente evoluído,
+    // mas não precisa existir como linha explícita na memória de reajustes.
+    // Competências intermediárias são obtidas pelo motor de evolução.
+    return competenciaNum <= guia5ISOParaNumero(fimISO);
+}
+
+function guia6ObterBeneficioDevidoPara13() {
+    var dibEl = document.getElementById('dib');
+    var rmiEl = document.getElementById('rmi');
+    var abonoEl = document.getElementById('possuiAbonoDevido');
+
+    return {
+        dib: dibEl ? dibEl.value : '',
+        dcb: document.getElementById('dcbDevido')
+            ? document.getElementById('dcbDevido').value
+            : null,
+        possuiAbono: !!(abonoEl && abonoEl.checked),
+        rmi: typeof parseMoeda === 'function' && rmiEl
+            ? parseMoeda(rmiEl.value)
+            : 0,
+        rmaFinal: Number(
+            guia6ObterItemMemoriaEvolucao(guia6ISOParaCompetencia(
+                guia6ObterFimRealEvolucaoISO() || ''
+            ))?.valorFinal || 0
+        ) || 0
+    };
+}
+
+function guia6CalcularValor13NaCompetencia(ano, memoria) {
+    if (typeof calcular13ParaAno !== 'function') {
+        console.warn('[Guia 6] calcular13ParaAno() não está disponível; 13º não será presumido.');
+        return 0;
+    }
+
+    var beneficio = guia6ObterBeneficioDevidoPara13();
+    if (!beneficio.possuiAbono) return 0;
+
+    // A memória pode ser vazia quando não houve reajuste. O motor agora
+    // fornece uma âncora de valor para esse cenário, mas mantemos o fallback
+    // vazio porque calcular13ParaAno() também consegue obter a base pela RMI
+    // e pelos limitadores da competência.
+    var memoria13 = Array.isArray(memoria)
+        ? memoria
+        : (guia6ObterMemoriaEvolucaoReal() || []);
+
+    var resultado13 = calcular13ParaAno(beneficio, ano, memoria13);
+    if (!resultado13 || resultado13.valor === undefined || resultado13.valor === null) {
+        console.warn('[Guia 6] Não foi possível obter o 13º real de ' + ano + '; nenhum valor presumido será aplicado.');
+        return 0;
+    }
+
+    return Number(resultado13.valor) || 0;
+}
+
+function calcularParcelaAjuizamento() {
+    var competenciaISO = guia6ObterCompetenciaAjuizamentoISO();
+    if (!competenciaISO) throw new Error('Data do Ajuizamento inválida.');
+    if (!guia6CompetenciaDentroDaEvolucao(competenciaISO)) return 0;
+
+    // Para a formação das vincendas, esta é a parcela-base integral do
+    // benefício na competência do ajuizamento. Ela NÃO é o total atualizado
+    // das vencidas e NÃO carrega SELIC.
+    try {
+        var evolucao = guia6ObterValorEvolucaoNaCompetencia(competenciaISO);
+        var valor = Number(evolucao && evolucao.valor);
+        if (!isNaN(valor) && valor >= 0) return valor;
+    } catch (e) {
+        console.warn('[Guia 6] Não foi possível obter a parcela-base integral pela evolução.', e);
+    }
+
+    var itemAtualizacao = guia6ObterItemAtualizacaoAjuizamento();
+    return itemAtualizacao ? Number(itemAtualizacao.valorCorrigido) || 0 : 0;
+}
+
+function guia6ObterItemAtualizacaoAjuizamento() {
+    var competenciaISO = guia6ObterCompetenciaAjuizamentoISO();
+    if (!window.resultadosAjuizamentoAtualizacao || !competenciaISO) return null;
+
+    var itens = window.resultadosAjuizamentoAtualizacao.itens || [];
+    for (var i = 0; i < itens.length; i++) {
+        if (itens[i].competenciaISO === competenciaISO) {
+            return itens[i];
+        }
+    }
+
+    return null;
+}
+
+function guia6CalcularVencidasAjustadas(valorTotalAtualizado, dataAjuizamento, tratamento) {
+    if (tratamento !== 'proporcional') {
+        return valorTotalAtualizado;
+    }
+
+    var item = guia6ObterItemAtualizacaoAjuizamento();
+    if (!item) {
+        return valorTotalAtualizado;
+    }
+
+    // A competência do ajuizamento é a última competência das vencidas.
+    // Quando o tratamento é proporcional, somente a fração já vencida do
+    // principal corrigido dessa competência integra as vencidas.
+    //
+    // Importante: a SELIC (e eventuais juros) da competência do ajuizamento
+    // NÃO deve ser proporcionalizada nem permanecer nas vencidas. A parcela
+    // do ajuizamento é tratada separadamente e, portanto, o cálculo aqui
+    // remove integralmente o total atualizado da competência e repõe apenas
+    // sua fração vencida do principal corrigido.
+    var fracaoVencida = guia6CalcularFracaoVencida(dataAjuizamento);
+    var valorCorrigidoCompetencia = Number(item.valorCorrigido);
+
+    if (isNaN(valorCorrigidoCompetencia)) {
+        return valorTotalAtualizado;
+    }
+
+    return valorTotalAtualizado
+        - (Number(item.total) || 0)
+        + (valorCorrigidoCompetencia * fracaoVencida);
+}
+
+function guia6ObterProximaCompetenciaISO(iso) {
+    return guia5ProximaCompetenciaISO(iso);
+}
+
+function guia6ObterDiferencaConsolidadaCompetencia(competenciaISO) {
+    if (!competenciaISO) return 0;
+
+    // A fonte oficial para as vincendas é a Guia 4, já consolidada após
+    // todas as edições manuais do usuário. Estes valores são nominais,
+    // antes de qualquer correção, juros ou SELIC.
+    var dados = Array.isArray(window.diferencasAtualizacaoAtual)
+        ? window.diferencasAtualizacaoAtual
+        : [];
+
+    for (var i = 0; i < dados.length; i++) {
+        var bruto = String(dados[i].competencia || '').trim();
+        var eh13 = /^13[º°]?\s*\/\s*\d{4}$/i.test(bruto);
+        var iso = eh13 ? (bruto.match(/(\d{4})$/) || [null, ''])[1] + '-13' : guia6NormalizarCompetenciaItem(bruto);
+        if (iso === competenciaISO) {
+            return Number(dados[i].diferenca) || 0;
+        }
+    }
+
+    // Fallback defensivo: se a sincronização ainda não tiver populado o
+    // cache, coleta diretamente a coluna "Diferença devida" da Guia 4.
+    if (typeof coletarDiferencasParaAtualizacao === 'function') {
+        try {
+            var coletadas = coletarDiferencasParaAtualizacao() || [];
+            for (var j = 0; j < coletadas.length; j++) {
+                var isoColetada = guia6NormalizarCompetenciaItem(coletadas[j].competencia);
+                if (isoColetada === competenciaISO) {
+                    return Number(coletadas[j].diferenca) || 0;
+                }
+            }
+        } catch (e) {
+            console.warn('[Guia 6] Falha ao ler a Diferença Devida consolidada da Guia 4.', e);
+        }
+    }
+
+    return 0;
+}
+
+function guia6ObterValorBaseVincendaConsolidada(competenciaISO) {
+    return guia6ObterDiferencaConsolidadaCompetencia(competenciaISO);
+}
+
+function calcularVincendas(parcelaAjuizamento, parametros) {
+    var metodo = parametros.metodoVincendas;
+    var tratamento = parametros.tratamentoMesAjuizamento;
+    var incluir13 = parametros.incluir13;
+    var dataAjuizamento = parametros.dataAjuizamento;
+    var competenciaAjuizamentoISO = parametros.competenciaAjuizamentoISO;
+
+    if (metodo === 'nao_considerar') {
+        return {
+            valor: 0,
+            parcelas: [],
+            quantidadeParcelas: 0
+        };
+    }
+
+    if (metodo === '1_parcela_anual') {
+        // A parcela das vincendas deve partir da diferença consolidada na
+        // Guia 4, antes de qualquer correção. A evolução do benefício é apenas
+        // um fallback histórico; não deve reintroduzir competências que o
+        // usuário zerou/editou na Guia 4.
+        var baseAnualConsolidada = guia6ObterValorBaseVincendaConsolidada(competenciaAjuizamentoISO);
+        var baseAnual = baseAnualConsolidada;
+        if (baseAnual === 0 && !Array.isArray(window.diferencasAtualizacaoAtual)) {
+            baseAnual = Number(parcelaAjuizamento) || 0;
+        }
+
+        if (tratamento === 'proporcional') {
+            // Quando DIB e ajuizamento estão na mesma competência, a
+            // parcela-base integral pode representar somente a fração
+            // efetivamente devida desde a DIB. Nesse caso, a parte
+            // vincenda deve ser retirada dessa mesma competência ativa,
+            // e não da mensalidade integral.
+            // A primeira vincenda é a parte do mês comercial posterior ao ajuizamento.
+            // Mesmo quando DIB e ajuizamento estão na mesma competência, a fração
+            // deve ser calculada sobre os 30 dias do mês comercial, e NÃO sobre
+            // os dias existentes entre a DIB e o fim do mês.
+            // Ex.: ajuizamento em 25/08 -> 6/30 da base.
+            var fracaoVincendaMesDibAnual = guia6CalcularFracaoRemanescente(dataAjuizamento);
+            if (fracaoVincendaMesDibAnual !== null) {
+                baseAnual = (Number(parcelaAjuizamento) || 0) * fracaoVincendaMesDibAnual;
+            } else {
+                baseAnual = baseAnual * guia6CalcularFracaoRemanescente(dataAjuizamento);
+            }
+        }
+
+        var baseIntegral = baseAnualConsolidada;
+        if (baseIntegral === 0 && !Array.isArray(window.diferencasAtualizacaoAtual)) {
+            baseIntegral = Number(parcelaAjuizamento) || 0;
+        }
+        var valorPrimeiraParcela = baseAnual;
+        var valorDemaisParcelas = baseIntegral;
+        var percentualBase = tratamento === 'proporcional'
+            ? guia6CalcularFracaoRemanescente(dataAjuizamento) * 100
+            : 100;
+
+        var totalAnual = valorPrimeiraParcela + (valorDemaisParcelas * 11);
+
+        return {
+            valor: totalAnual,
+            parcelas: [],
+            quantidadeParcelas: 12,
+            metodo: metodo,
+            composicao: [
+                {
+                    descricao: '1ª parcela — mês do ajuizamento',
+                    quantidade: 1,
+                    valorUnitario: valorPrimeiraParcela,
+                    total: valorPrimeiraParcela,
+                    detalhe: Number(percentualBase).toFixed(4).replace('.', ',') + '% da base (' + formatarMoedaAtualizacao(baseIntegral) + ')'
+                },
+                {
+                    descricao: 'Demais parcelas',
+                    quantidade: 11,
+                    valorUnitario: valorDemaisParcelas,
+                    total: valorDemaisParcelas * 11,
+                    detalhe: 'parcelas integrais'
+                }
+            ]
+        };
+    }
+
+    if (metodo !== 'ate_12') {
+        throw new Error('Método de vincendas inválido.');
+    }
+
+    var parcelas = [];
+    var cursor = competenciaAjuizamentoISO;
+
+    if (tratamento === 'integral') {
+        cursor = guia6ObterProximaCompetenciaISO(cursor);
+    }
+
+    while (parcelas.length < 12) {
+        if (!guia6CompetenciaDentroDaEvolucao(cursor)) {
+            break;
+        }
+
+        // Fonte consolidada: Guia 4 / Diferença Devida, antes da correção.
+        // Isso preserva as alterações manuais da Guia 4 (inclusive valores
+        // zerados) e impede que a Guia 6 reconstrua parcelas pela evolução.
+        var valorMensalIntegral = guia6ObterValorBaseVincendaConsolidada(cursor);
+        var possuiFonteGuia4 = Array.isArray(window.diferencasAtualizacaoAtual);
+        if (!possuiFonteGuia4) {
+            try {
+                valorMensalIntegral = guia6ObterValorEvolucaoNaCompetencia(cursor).valor;
+            } catch (e) {
+                break;
+            }
+        }
+
+        var valorMensal = valorMensalIntegral;
+
+        if (cursor === competenciaAjuizamentoISO && tratamento === 'proporcional') {
+            // A primeira vincenda proporcional é somente a parte posterior
+            // ao ajuizamento. Quando DIB e ajuizamento estão na mesma
+            // competência, a fração deve ser calculada sobre a parte da
+            // competência que efetivamente existe desde a DIB.
+            // A evolução fornece o valor mensal integral. A primeira
+            // vincenda ocupa os dias do ajuizamento até o fim do mês
+            // comercial de 30 dias. A DIB não deve mudar o denominador: ela
+            // já foi considerada na composição das vencidas.
+            var fracaoVincendaMesDib = guia6CalcularFracaoRemanescente(dataAjuizamento);
+            if (fracaoVincendaMesDib !== null) {
+                valorMensal = (Number(valorMensalIntegral) || 0) * fracaoVincendaMesDib;
+            } else {
+                valorMensal = (Number(parcelaAjuizamento) || 0) *
+                    guia6CalcularFracaoRemanescente(dataAjuizamento);
+            }
+        }
+
+        var competenciaBR = guia6ISOParaCompetencia(cursor);
+        var mes = parseInt(competenciaBR.substring(0, 2), 10);
+
+        // O 13º é agregado à competência de dezembro e não conta como
+        // parcela adicional. O valor vem da função real do projeto,
+        // considerando avos, DIB/DCB e a memória mensal quando aplicável.
+        if (mes === 12 && incluir13) {
+            var ano13 = parseInt(competenciaBR.substring(3, 7), 10);
+            var competencia13ISO = String(ano13) + '-13';
+            var valor13Consolidado = guia6ObterDiferencaConsolidadaCompetencia(competencia13ISO);
+
+            if (Array.isArray(window.diferencasAtualizacaoAtual)) {
+                // Se a Guia 4 possui a linha do 13º, ela é a fonte oficial.
+                valorMensal += valor13Consolidado;
+            } else {
+                var memoria13 = null;
+                try {
+                    memoria13 = guia6ObterValorEvolucaoNaCompetencia(cursor).resultado.memoria || null;
+                } catch (e13) {
+                    memoria13 = guia6ObterMemoriaEvolucaoReal();
+                }
+                valorMensal += guia6CalcularValor13NaCompetencia(ano13, memoria13);
+            }
+        }
+
+        parcelas.push({
+            competencia: competenciaBR,
+            competenciaISO: cursor,
+            valor: valorMensal,
+            inclui13: mes === 12 && incluir13
+        });
+
+        cursor = guia6ObterProximaCompetenciaISO(cursor);
+    }
+
+    var total = parcelas.reduce(function(soma, parcela) {
+        return soma + parcela.valor;
+    }, 0);
+
+    return {
+        valor: total,
+        parcelas: parcelas,
+        quantidadeParcelas: parcelas.length,
+        metodo: metodo,
+        composicao: parcelas.map(function(parcela) {
+            return {
+                descricao: parcela.competencia,
+                quantidade: 1,
+                valorUnitario: parcela.valor,
+                total: parcela.valor,
+                inclui13: !!parcela.inclui13
+            };
+        })
+    };
+}
+
+function calcularLimiteJuizado(parametros) {
+    if (!parametros.limitarAoTeto) {
+        return {
+            salarioMinimoAjuizamento: null,
+            limiteJuizado: null
+        };
+    }
+
+    if (typeof obterSalarioMinimoPorCompetencia !== 'function') {
+        throw new Error('Função de salário mínimo não está disponível.');
+    }
+
+    var salario = obterSalarioMinimoPorCompetencia(parametros.competenciaAjuizamento);
+    if (salario === null || salario === undefined || isNaN(salario)) {
+        throw new Error('Não foi possível obter o salário mínimo da competência do ajuizamento.');
+    }
+
+    var quantidade = Number(parametros.quantidadeSalariosMinimos);
+    if (isNaN(quantidade) || quantidade < 0) {
+        throw new Error('Quantidade de salários mínimos inválida.');
+    }
+
+    return {
+        salarioMinimoAjuizamento: Number(salario),
+        limiteJuizado: Number(salario) * quantidade
+    };
+}
+
+function calcularRenunciaAjuizamento(valorDemanda, limiteJuizado, limitarAoTeto) {
+    if (!limitarAoTeto) {
+        return 0;
+    }
+
+    return Math.max(0, (Number(valorDemanda) || 0) - (Number(limiteJuizado) || 0));
+}
+
+/**
+ * Atualiza o valor renunciado no ajuizamento usando EXATAMENTE os mesmos
+ * motores da Guia 5. A única diferença é a competência-base: o valor
+ * renunciado nasce no ajuizamento e é levado até a Data de Atualização da
+ * Guia 5. Não cria encadeamento paralelo.
+ */
+function calcularAtualizacaoValorRenunciado() {
+    var resultadoDemanda = window.resultadoAjuizamento;
+    if (!resultadoDemanda) return null;
+
+    var valorBase = Number(resultadoDemanda.renunciaAjuizamento) || 0;
+    var competenciaBaseISO = guia6ObterCompetenciaAjuizamentoISO();
+    if (!competenciaBaseISO || valorBase <= 0) {
+        window.resultadoAtualizacaoRenuncia = {
+            valorBase: valorBase,
+            competenciaBaseISO: competenciaBaseISO || null,
+            dataAtualizacaoISO: null,
+            coeficiente: 1,
+            valorCorrigido: valorBase,
+            valorJuros: 0,
+            percentualJuros: 0,
+            valorSelic: 0,
+            percentualSelic: 0,
+            totalAtualizado: valorBase,
+            totalGuia5: 0,
+            totalAposRenunciaPrincipal: 0,
+            totalAposRenunciaJuros: 0,
+            totalAposRenunciaSelic: 0,
+            totalAposRenuncia: 0,
+            totalAposAcordoPrincipal: 0,
+            totalAposAcordoJuros: 0,
+            totalAposAcordoSelic: 0,
+            totalAposAcordo: 0,
+            semRenuncia: valorBase <= 0
+        };
+        renderizarAtualizacaoValorRenunciado();
+        return window.resultadoAtualizacaoRenuncia;
+    }
+
+    // A Guia 6 usa a mesma Data de Atualização efetiva da Guia 5.
+    var dataAtualizacaoEl = document.getElementById('dataAtualizacao2') || document.getElementById('dataAtualizacao');
+    var dataAtualizacaoBR = dataAtualizacaoEl ? String(dataAtualizacaoEl.value || '').trim() : '';
+    var atualizacaoISO = guia5CompetenciaParaISO(dataAtualizacaoBR);
+    if (!atualizacaoISO) {
+        throw new Error('Informe a Data de Atualização da Guia 5 para atualizar o valor renunciado.');
+    }
+
+    if (!window.parametrosCorrecaoAtual) {
+        throw new Error('Carregue os parâmetros de correção monetária antes de atualizar o valor renunciado.');
+    }
+
+    // Garante que o resultado oficial da Guia 5 exista para o abatimento final.
+    if (!window.resultadosAtualizacao && typeof calcularAtualizacaoGuia5 === 'function') {
+        calcularAtualizacaoGuia5();
+    }
+
+    var coef = guia5CalcularCoeficienteMensal(
+        competenciaBaseISO,
+        atualizacaoISO,
+        window.parametrosCorrecaoAtual
+    );
+
+    var valorCorrigidoCalculado = valorBase * coef.coeficiente;
+    var valorCorrigido = coef.coeficiente < 1
+        ? Math.max(valorBase, valorCorrigidoCalculado)
+        : valorCorrigidoCalculado;
+
+    var obj = {
+        competencia: guia6ISOParaCompetencia(competenciaBaseISO),
+        competenciaISO: competenciaBaseISO,
+        diferenca: valorBase,
+        coeficiente: coef.coeficiente,
+        criterio: coef.criterio,
+        valorCorrigido: valorCorrigido
+    };
+
+    var valorJuros = 0;
+    var percentualJuros = 0;
+    var detalhamentoJuros = [];
+    var valorJurosAntesSelic = 0;
+    var percentualJurosAntesSelic = 0;
+    var criteriosJuros = [];
+    var quantidadeMesesJuros = 0;
+    var percentualSelic = 0;
+    var valorSelic = 0;
+    var detalhamentoSelic = [];
+
+    // Esta parte replica a lógica da Guia 5: juros anteriores à SELIC,
+    // SELIC e eventual juros posterior ao último período SELIC.
+    if (window.parametrosSelicAtual) {
+        var periodosSelic = window.parametrosSelicAtual.periodos;
+        if (!periodosSelic || !periodosSelic.length) {
+            throw new Error('Encadeamento SELIC vazio.');
+        }
+
+        var primeiroPeriodo = periodosSelic[0];
+        var inicioSelicISO = guia5CompetenciaParaISO(primeiroPeriodo.inicio);
+        if (!inicioSelicISO) throw new Error('Início do primeiro período SELIC inválido.');
+
+        var inicioSelicNum = guia5ISOParaNumero(inicioSelicISO);
+        var compNum = guia5ISOParaNumero(competenciaBaseISO);
+        var inicioEfetivoNum = Math.max(compNum, inicioSelicNum);
+        var inicioEfetivoISO = String(Math.floor(inicioEfetivoNum / 100)) + '-' + String(inicioEfetivoNum % 100).padStart(2, '0');
+
+        var mes = inicioEfetivoNum % 100;
+        var ano = Math.floor(inicioEfetivoNum / 100);
+        if (mes > 1) mes--;
+        else { mes = 12; ano--; }
+        var fimPreSelicISO = String(ano) + '-' + String(mes).padStart(2, '0');
+        var fimPreSelicNum = ano * 100 + mes;
+
+        var inicioJurosEl = document.getElementById('inicioJuros2') || document.getElementById('inicioJuros');
+        var inicioJurosISO = inicioJurosEl ? guia5CompetenciaParaISO(String(inicioJurosEl.value || '').trim()) : null;
+
+        if (window.parametrosJurosAtual && inicioJurosISO) {
+            var inicioJurosNum = guia5ISOParaNumero(inicioJurosISO);
+            if (fimPreSelicNum >= Math.max(compNum, inicioJurosNum)) {
+                var jurosPre = guia5CalcularJurosIntervalo(
+                    obj,
+                    inicioJurosISO,
+                    fimPreSelicISO,
+                    window.parametrosJurosAtual,
+                    atualizacaoISO
+                );
+                valorJurosAntesSelic = Number(jurosPre.valor) || 0;
+                percentualJurosAntesSelic = Number(jurosPre.percentual) || 0;
+                percentualJuros += percentualJurosAntesSelic;
+                valorJuros += valorJurosAntesSelic;
+                criteriosJuros = jurosPre.criterios.slice();
+                quantidadeMesesJuros += Number(jurosPre.meses) || 0;
+                detalhamentoJuros = detalhamentoJuros.concat(jurosPre.detalhamento || []);
+            }
+        }
+
+        var selicObj = guia5CalcularSelic(obj, atualizacaoISO, window.parametrosSelicAtual);
+        percentualSelic = Number(selicObj.percentualSelic) || 0;
+        detalhamentoSelic = selicObj.detalhamentoSelic || [];
+        var baseSelic = valorCorrigido + valorJurosAntesSelic;
+        valorSelic = baseSelic * percentualSelic / 100;
+
+        var ultimoPeriodo = periodosSelic[periodosSelic.length - 1];
+        var fimSelicISO = ultimoPeriodo.fim ? guia5CompetenciaParaISO(ultimoPeriodo.fim) : null;
+        if (fimSelicISO && window.parametrosJurosAtual) {
+            var proxSelic = guia5ProximaCompetenciaISO(fimSelicISO);
+            if (guia5ISOParaNumero(proxSelic) <= guia5ISOParaNumero(atualizacaoISO)) {
+                var jurosPos = guia5CalcularJurosIntervalo(
+                    obj,
+                    (inicioJurosISO && guia5ISOParaNumero(inicioJurosISO) > guia5ISOParaNumero(proxSelic) ? inicioJurosISO : proxSelic),
+                    atualizacaoISO,
+                    window.parametrosJurosAtual,
+                    atualizacaoISO
+                );
+                percentualJuros += Number(jurosPos.percentual) || 0;
+                valorJuros += Number(jurosPos.valor) || 0;
+                (jurosPos.criterios || []).forEach(function(c) {
+                    if (criteriosJuros.indexOf(c) === -1) criteriosJuros.push(c);
+                });
+                quantidadeMesesJuros += Number(jurosPos.meses) || 0;
+                detalhamentoJuros = detalhamentoJuros.concat(jurosPos.detalhamento || []);
+            }
+        }
+    } else if (window.parametrosJurosAtual) {
+        var inicioJurosEl2 = document.getElementById('inicioJuros2') || document.getElementById('inicioJuros');
+        var inicioJurosISO2 = inicioJurosEl2 ? guia5CompetenciaParaISO(String(inicioJurosEl2.value || '').trim()) : null;
+        if (inicioJurosISO2) {
+            var jurosTotal = guia5CalcularJurosDeterministicos(
+                obj,
+                inicioJurosISO2,
+                atualizacaoISO,
+                window.parametrosJurosAtual
+            );
+            percentualJuros = Number(jurosTotal.percentualJurosTotal) || 0;
+            valorJuros = Number(jurosTotal.valorJuros) || 0;
+            percentualJurosAntesSelic = Number(jurosTotal.percentualJurosAntesSelic) || 0;
+            detalhamentoJuros = jurosTotal.detalhamentoJuros || [];
+            criteriosJuros = jurosTotal.criteriosJuros || [];
+            quantidadeMesesJuros = Number(jurosTotal.quantidadeMesesJuros) || 0;
+        }
+    }
+
+    var totalAtualizado = valorCorrigido + valorJuros + valorSelic;
+    var totalGuia5 = window.resultadosAtualizacao
+        ? Number(window.resultadosAtualizacao.totalCorrigido || 0) + Number(window.resultadosAtualizacao.totalJuros || 0) + Number(window.resultadosAtualizacao.totalSelic || 0)
+        : 0;
+    var totalAposRenuncia = Math.max(0, totalGuia5 - totalAtualizado);
+
+    window.resultadoAtualizacaoRenuncia = {
+        valorBase: valorBase,
+        competenciaBaseISO: competenciaBaseISO,
+        competenciaBase: guia6ISOParaCompetencia(competenciaBaseISO),
+        dataAtualizacaoISO: atualizacaoISO,
+        dataAtualizacao: guia6ISOParaCompetencia(atualizacaoISO),
+        coeficiente: Number(coef.coeficiente) || 1,
+        criterio: coef.criterio,
+        valorCorrigido: valorCorrigido,
+        percentualJurosAntesSelic: percentualJurosAntesSelic,
+        percentualJuros: percentualJuros,
+        valorJuros: valorJuros,
+        criteriosJuros: criteriosJuros,
+        quantidadeMesesJuros: quantidadeMesesJuros,
+        detalhamentoJuros: detalhamentoJuros,
+        percentualSelic: percentualSelic,
+        valorSelic: valorSelic,
+        detalhamentoSelic: detalhamentoSelic,
+        totalAtualizado: totalAtualizado,
+        totalGuia5: totalGuia5,
+        totalAposRenunciaPrincipal: Math.max(0, Number(window.resultadosAtualizacao?.totalCorrigido || 0) - Number(valorCorrigido || 0)),
+        totalAposRenunciaJuros: Math.max(0, Number(window.resultadosAtualizacao?.totalJuros || 0) - Number(valorJuros || 0)),
+        totalAposRenunciaSelic: Math.max(0, Number(window.resultadosAtualizacao?.totalSelic || 0) - Number(valorSelic || 0)),
+        totalAposRenuncia: totalAposRenuncia
+    };
+
+    renderizarAtualizacaoValorRenunciado();
+    return window.resultadoAtualizacaoRenuncia;
+}
+
+function renderizarAtualizacaoValorRenunciado() {
+    var r = window.resultadoAtualizacaoRenuncia;
+    if (!r) return;
+
+    var guia5 = window.resultadosAtualizacao || {};
+    var guia5Principal = Number(guia5.totalCorrigido || 0);
+    var guia5Juros = Number(guia5.totalJuros || 0);
+    var guia5Selic = Number(guia5.totalSelic || 0);
+    var guia5Total = guia5Principal + guia5Juros + guia5Selic;
+
+    var renunciaPrincipal = Number(r.valorCorrigido || 0);
+    var renunciaJuros = Number(r.valorJuros || 0);
+    var renunciaSelic = Number(r.valorSelic || 0);
+    var renunciaTotal = renunciaPrincipal + renunciaJuros + renunciaSelic;
+
+    // Mantém o valor oficial do motor como referência e, para a apresentação,
+    // discrimina a subtração por componente exatamente como na memória da Guia 5.
+    var aposPrincipal = Math.max(0, guia5Principal - renunciaPrincipal);
+    var aposJuros = Math.max(0, guia5Juros - renunciaJuros);
+    var aposSelic = Math.max(0, guia5Selic - renunciaSelic);
+    var aposTotal = aposPrincipal + aposJuros + aposSelic;
+
+    // Estes quatro valores são a BASE OFICIAL DA GUIA 7 quando não há acordo.
+    // Não basta transportar o total: a Guia 7 precisa receber a composição
+    // após a renúncia (Principal + Juros + SELIC).
+    r.totalAposRenunciaPrincipal = aposPrincipal;
+    r.totalAposRenunciaJuros = aposJuros;
+    r.totalAposRenunciaSelic = aposSelic;
+    r.totalAposRenuncia = aposTotal;
+    window.resultadoAtualizacaoRenuncia = r;
+
+    var map = {
+        renunciaAjuizamento: r.valorBase,
+        totalGuia5AntesRenuncia: guia5Total,
+        abatimentoRenunciaAtualizado: renunciaTotal,
+        totalGuia5AposRenuncia: aposTotal
+    };
+
+    Object.keys(map).forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = formatarMoedaAtualizacao(map[id]);
+    });
+
+    var coefEl = document.getElementById('coeficienteRenunciaAtualizacao');
+    if (coefEl) coefEl.textContent = Number(r.coeficiente || 1).toFixed(6);
+
+    var nota = document.getElementById('notaAtualizacaoRenuncia');
+    if (nota) {
+        nota.textContent = 'Base de ' + formatarMoedaAtualizacao(r.valorBase) + ' em ' + (r.competenciaBase || '-') + ' atualizada até ' + (r.dataAtualizacao || '-') + ' com os mesmos critérios/encadeamentos da Guia 5.';
+    }
+
+    var acordoAtivo = !!r.acordoAtivo;
+    var acordoPrincipal = Number(r.totalAposAcordoPrincipal || 0);
+    var acordoJuros = Number(r.totalAposAcordoJuros || 0);
+    var acordoSelic = Number(r.totalAposAcordoSelic || 0);
+    var acordoTotal = Number(r.totalAposAcordo || (acordoPrincipal + acordoJuros + acordoSelic));
+
+    var componentes = {
+        totalGuia5Principal: guia5Principal,
+        totalGuia5Juros: guia5Juros,
+        totalGuia5Selic: guia5Selic,
+        renunciaPrincipalAtualizado: renunciaPrincipal,
+        renunciaJurosAtualizado: renunciaJuros,
+        renunciaSelicAtualizado: renunciaSelic,
+        totalAposRenunciaPrincipal: aposPrincipal,
+        totalAposRenunciaJuros: aposJuros,
+        totalAposRenunciaSelic: aposSelic,
+        totalAposAcordoPrincipal: acordoPrincipal,
+        totalAposAcordoJuros: acordoJuros,
+        totalAposAcordoSelic: acordoSelic,
+        totalAposAcordo: acordoTotal
+    };
+    Object.keys(componentes).forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = formatarMoedaAtualizacao(componentes[id]);
+    });
+
+    var rotuloAcordo = document.getElementById('rotuloTotalAposAcordo');
+    if (rotuloAcordo) {
+        if (acordoAtivo) {
+            var pctAcordo = Number(r.percentualAcordo);
+            if (!Number.isFinite(pctAcordo)) pctAcordo = 100;
+            var pctTexto = pctAcordo.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+            rotuloAcordo.textContent = 'Total após acordo no percentual de ' + pctTexto + '%';
+        } else {
+            rotuloAcordo.textContent = 'Total após acordo';
+        }
+    }
+
+    var linhaAcordo = document.getElementById('linhaTotalAposAcordo');
+    if (linhaAcordo) linhaAcordo.classList.toggle('hidden', !acordoAtivo);
+
+    var painelAcordo = document.getElementById('painelAcordoDetalhes');
+    if (painelAcordo) painelAcordo.classList.toggle('hidden', !acordoAtivo);
+
+    var presetAcordo = document.getElementById('percentualAcordoPreset');
+    var campoAcordo = document.getElementById('percentualAcordo');
+    if (campoAcordo && presetAcordo) {
+        var mostrarPersonalizado = acordoAtivo && presetAcordo.value === 'personalizado';
+        campoAcordo.classList.toggle('hidden', !mostrarPersonalizado);
+        campoAcordo.disabled = !mostrarPersonalizado;
+    }
+
+    var tbody = document.getElementById('corpoAtualizacaoRenuncia');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    var tr = document.createElement('tr');
+    tr.className = 'border-b border-slate-200';
+    var valores = [
+        r.competenciaBase || '-',
+        formatarMoedaAtualizacao(r.valorBase),
+        Number(r.coeficiente || 1).toFixed(6),
+        formatarMoedaAtualizacao(r.valorCorrigido),
+        formatarPercentualAtualizacao(r.percentualJuros || 0, 2),
+        formatarMoedaAtualizacao(r.valorJuros),
+        formatarPercentualAtualizacao(r.percentualSelic || 0, 2),
+        formatarMoedaAtualizacao(r.valorSelic),
+        formatarMoedaAtualizacao(r.totalAtualizado)
+    ];
+    valores.forEach(function(valor, i) {
+        var td = document.createElement('td');
+        td.className = 'p-3 ' + (i === 0 ? 'font-semibold' : 'text-right font-mono');
+        td.textContent = valor;
+        tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+}
+
+function calcularAcordo(valorAposRenuncia, parametros, componentes) {
+    var pct = Number(parametros && parametros.percentualAcordo);
+    if (isNaN(pct)) pct = 100;
+    pct = Math.max(0, Math.min(100, pct));
+
+    var baseTotal = componentes
+        ? Number(componentes.principal || 0) + Number(componentes.juros || 0) + Number(componentes.selic || 0)
+        : (Number(valorAposRenuncia) || 0);
+
+    if (!parametros || !parametros.acordoAtivo) {
+        return {
+            percentual: 100,
+            basePrincipal: componentes ? Number(componentes.principal || 0) : baseTotal,
+            baseJuros: componentes ? Number(componentes.juros || 0) : 0,
+            baseSelic: componentes ? Number(componentes.selic || 0) : 0,
+            principalFinal: componentes ? Number(componentes.principal || 0) : baseTotal,
+            jurosFinal: componentes ? Number(componentes.juros || 0) : 0,
+            selicFinal: componentes ? Number(componentes.selic || 0) : 0,
+            totalBase: baseTotal,
+            totalFinal: baseTotal,
+            valorAcordo: 0,
+            valorAcordoPrincipal: 0,
+            valorAcordoJuros: 0,
+            valorAcordoSelic: 0
+        };
+    }
+
+    var fator = pct / 100;
+    var principal = componentes ? Number(componentes.principal || 0) : baseTotal;
+    var juros = componentes ? Number(componentes.juros || 0) : 0;
+    var selic = componentes ? Number(componentes.selic || 0) : 0;
+    var principalFinal = principal * fator;
+    var jurosFinal = juros * fator;
+    var selicFinal = selic * fator;
+    var totalFinal = principalFinal + jurosFinal + selicFinal;
+
+    return {
+        percentual: pct,
+        basePrincipal: principal,
+        baseJuros: juros,
+        baseSelic: selic,
+        principalFinal: principalFinal,
+        jurosFinal: jurosFinal,
+        selicFinal: selicFinal,
+        totalBase: baseTotal,
+        totalFinal: totalFinal,
+        valorAcordoPrincipal: principal - principalFinal,
+        valorAcordoJuros: juros - jurosFinal,
+        valorAcordoSelic: selic - selicFinal,
+        valorAcordo: baseTotal - totalFinal
+    };
+}
+
+function guia6ColetarParametrosFormacaoDemanda() {
+    var dataAjuizamentoEl = document.getElementById('dataAjuizamento');
+    var metodoEl = document.getElementById('metodoVincendas');
+    var tratamentoEl = document.getElementById('tratamentoMesAjuizamento');
+    var incluir13El = document.getElementById('incluir13Vincendas');
+    var limitarEl = document.getElementById('limitarAoTeto');
+    var quantidadeEl = document.getElementById('quantidadeSalariosMinimos');
+    var acordoEl = document.getElementById('acordoAtivo');
+    var presetEl = document.getElementById('percentualAcordoPreset');
+    var personalizadoEl = document.getElementById('percentualAcordo');
+
+    var dataAjuizamento = dataAjuizamentoEl ? dataAjuizamentoEl.value.trim() : '';
+    var competencia = obterCompetenciaAjuizamento();
+
+    var acordoAtivo = acordoEl ? acordoEl.value === 'sim' : false;
+    var percentual = 100;
+
+    if (acordoAtivo) {
+        if (presetEl && presetEl.value === 'personalizado') {
+            percentual = Number(personalizadoEl ? personalizadoEl.value : 100);
+        } else if (presetEl) {
+            percentual = Number(presetEl.value);
+        }
+    }
+
+    if (isNaN(percentual)) percentual = 100;
+    percentual = Math.max(0, Math.min(100, percentual));
+
+    var parametros = {
+        dataAjuizamento: dataAjuizamento,
+        competenciaAjuizamento: competencia || '',
+        competenciaAjuizamentoISO: guia6ObterCompetenciaAjuizamentoISO() || '',
+        metodoVincendas: metodoEl ? metodoEl.value : '1_parcela_anual',
+        tratamentoMesAjuizamento: tratamentoEl ? tratamentoEl.value : 'integral',
+        incluir13: incluir13El ? incluir13El.value === 'sim' : false,
+        limitarAoTeto: limitarEl ? limitarEl.value === 'sim' : false,
+        quantidadeSalariosMinimos: quantidadeEl ? Number(quantidadeEl.value) || 60 : 60,
+        acordoAtivo: acordoAtivo,
+        percentualAcordo: percentual
+    };
+
+    window.parametrosFormacaoDemanda = parametros;
+    return parametros;
+}
+
+function calcularFormacaoDemanda() {
+    var status = document.getElementById('statusFormacaoDemanda');
+
+    try {
+        var parametros = guia6ColetarParametrosFormacaoDemanda();
+
+        if (!parametros.competenciaAjuizamentoISO) {
+            throw new Error('Informe a Data do Ajuizamento.');
+        }
+
+        calcularAtualizacaoAteAjuizamento();
+
+        // A memória até o ajuizamento já vem com a competência do ajuizamento
+        // proporcionalizada (quando aplicável) e sem SELIC nessa competência.
+        // Não aplicar uma segunda fração aqui.
+        var valorVencidas = Number(
+            window.resultadosAjuizamentoAtualizacao.totalAtualizado
+        ) || 0;
+
+        var parcelaAjuizamento = calcularParcelaAjuizamento();
+
+        var vincendas = calcularVincendas(parcelaAjuizamento, parametros);
+        var valorVincendas = Number(vincendas.valor) || 0;
+
+        var valorDemanda = valorVencidas + valorVincendas;
+
+        var limite = calcularLimiteJuizado(parametros);
+        var renuncia = calcularRenunciaAjuizamento(
+            valorDemanda,
+            limite.limiteJuizado,
+            parametros.limitarAoTeto
+        );
+
+        var valorAposRenuncia = valorDemanda - renuncia;
+
+        window.resultadoAjuizamento = {
+            valorVencidasAjuizamento: valorVencidas,
+            parcelaAjuizamento: parcelaAjuizamento,
+            valorVincendas: valorVincendas,
+            valorDemandaAjuizamento: valorDemanda,
+            salarioMinimoAjuizamento: limite.salarioMinimoAjuizamento,
+            quantidadeSalariosMinimos: parametros.limitarAoTeto
+                ? parametros.quantidadeSalariosMinimos
+                : null,
+            limiteJuizado: limite.limiteJuizado,
+            renunciaAjuizamento: renuncia,
+            valorAposRenuncia: valorAposRenuncia,
+            acordoAtivo: parametros.acordoAtivo,
+            percentualAcordo: parametros.percentualAcordo,
+            valorAcordo: 0,
+            valorFinal: valorAposRenuncia,
+            parcelasVincendas: vincendas.parcelas,
+            quantidadeParcelasVincendas: vincendas.quantidadeParcelas,
+            composicaoVincendas: vincendas.composicao || [],
+            desatualizado: false
+        };
+
+        renderizarFormacaoDemanda();
+
+        // Primeiro atualiza a renúncia com os mesmos critérios da Guia 5.
+        // O acordo incide sobre cada componente do TOTAL APÓS RENÚNCIA,
+        // e não sobre o limite do Juizado ou sobre o valor no ajuizamento.
+        calcularAtualizacaoValorRenunciado();
+
+        var rRen = window.resultadoAtualizacaoRenuncia || {};
+        var componentesAposRenuncia = {
+            principal: Number(rRen.totalAposRenunciaPrincipal || 0),
+            juros: Number(rRen.totalAposRenunciaJuros || 0),
+            selic: Number(rRen.totalAposRenunciaSelic || 0)
+        };
+        var acordo = calcularAcordo(valorAposRenuncia, parametros, componentesAposRenuncia);
+
+        window.resultadoAjuizamento.acordoAtivo = parametros.acordoAtivo;
+        window.resultadoAjuizamento.percentualAcordo = acordo.percentual;
+        window.resultadoAjuizamento.valorAcordo = acordo.valorAcordo;
+        window.resultadoAjuizamento.valorAcordoPrincipal = acordo.valorAcordoPrincipal;
+        window.resultadoAjuizamento.valorAcordoJuros = acordo.valorAcordoJuros;
+        window.resultadoAjuizamento.valorAcordoSelic = acordo.valorAcordoSelic;
+        window.resultadoAjuizamento.totalAposAcordoPrincipal = acordo.principalFinal;
+        window.resultadoAjuizamento.totalAposAcordoJuros = acordo.jurosFinal;
+        window.resultadoAjuizamento.totalAposAcordoSelic = acordo.selicFinal;
+        window.resultadoAjuizamento.totalAposAcordo = acordo.totalFinal;
+        window.resultadoAjuizamento.valorFinal = acordo.totalFinal;
+
+        rRen.totalAposAcordoPrincipal = acordo.principalFinal;
+        rRen.totalAposAcordoJuros = acordo.jurosFinal;
+        rRen.totalAposAcordoSelic = acordo.selicFinal;
+        rRen.totalAposAcordo = acordo.totalFinal;
+        rRen.valorAcordoPrincipal = acordo.valorAcordoPrincipal;
+        rRen.valorAcordoJuros = acordo.valorAcordoJuros;
+        rRen.valorAcordoSelic = acordo.valorAcordoSelic;
+        rRen.valorAcordo = acordo.valorAcordo;
+        rRen.acordoAtivo = parametros.acordoAtivo;
+        rRen.percentualAcordo = acordo.percentual;
+        window.resultadoAtualizacaoRenuncia = rRen;
+
+        renderizarAtualizacaoValorRenunciado();
+
+        if (status) {
+            status.textContent = '✓ Cálculo atualizado automaticamente.';
+            status.className = 'text-xs text-green-700';
+        }
+
+        return window.resultadoAjuizamento;
+
+    } catch (erro) {
+        if (status) {
+            status.textContent = '❌ ' + erro.message;
+            status.className = 'text-sm text-red-700';
+        }
+        return null;
+    }
+}
+
+function renderizarMemoriaAjuizamento() {
+    var resultado = window.resultadosAjuizamentoAtualizacao;
+    var tbody = document.getElementById('corpoMemoriaAjuizamento');
+
+    if (!resultado || !tbody) return;
+
+    var painel = document.getElementById('painelMemoriaAjuizamento');
+    if (painel) {
+        var notaExistente = document.getElementById('notaDataBaseRenuncia');
+        if (!notaExistente) {
+            notaExistente = document.createElement('div');
+            notaExistente.id = 'notaDataBaseRenuncia';
+            notaExistente.className = 'mb-3 px-3 py-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800';
+            var tabela = painel.querySelector('.overflow-x-auto');
+            painel.insertBefore(notaExistente, tabela || painel.firstChild);
+        }
+        notaExistente.textContent = 'Data-base da atualização das vencidas: ' + (resultado.dataBaseAtualizacao || '-') + ' — mês anterior ao ajuizamento. A Guia 6 utiliza os mesmos critérios/encadeamentos da Guia 5.';
+    }
+
+    tbody.innerHTML = '';
+
+    resultado.itens.forEach(function(item) {
+        var tr = document.createElement('tr');
+        tr.className = 'border-b border-slate-200 hover:bg-slate-50';
+
+        var valores = [
+            item.competencia,
+            formatarMoedaAtualizacao(item.diferenca),
+            item.coeficiente !== undefined ? Number(item.coeficiente).toFixed(10) : '-',
+            formatarMoedaAtualizacao(item.valorCorrigido),
+            formatarMoedaAtualizacao(0),
+            item.percentualSelic !== undefined ? formatarPercentualAtualizacao(item.percentualSelic, 2) : '-',
+            formatarMoedaAtualizacao(item.valorSelic),
+            formatarMoedaAtualizacao(item.total)
+        ];
+
+        valores.forEach(function(valor, index) {
+            var td = document.createElement('td');
+            td.className = 'p-2 ' + (index === 0 ? 'font-semibold' : 'text-right font-mono');
+            td.textContent = valor;
+            tr.appendChild(td);
+        });
+
+        tbody.appendChild(tr);
+    });
+
+    var originalEl = document.getElementById('totalOriginalAjuizamento');
+    var corrigidoEl = document.getElementById('totalCorrigidoAjuizamento');
+    var jurosEl = document.getElementById('totalJurosAjuizamento');
+    var selicEl = document.getElementById('totalSelicAjuizamento');
+    var totalEl = document.getElementById('totalAtualizadoAjuizamento');
+
+    if (originalEl) originalEl.textContent = formatarMoedaAtualizacao(resultado.totalOriginal);
+    if (corrigidoEl) corrigidoEl.textContent = formatarMoedaAtualizacao(resultado.totalCorrigido);
+    if (jurosEl) jurosEl.textContent = formatarMoedaAtualizacao(0);
+    if (selicEl) selicEl.textContent = formatarMoedaAtualizacao(resultado.totalSelic);
+    if (totalEl) totalEl.textContent = formatarMoedaAtualizacao(resultado.totalAtualizado);
+}
+
+function renderizarParcelasVincendas() {
+    var resultado = window.resultadoAjuizamento;
+    var container = document.getElementById('painelParcelasVincendas');
+    var tbody = document.getElementById('corpoParcelasVincendas');
+    var totalEl = document.getElementById('totalParcelasVincendas');
+    var quantidadeEl = document.getElementById('quantidadeParcelasVincendasUI');
+    var tabelaCompetencias = document.getElementById('tabelaCompetenciasVincendas');
+    var tabelaComposicao = document.getElementById('tabelaComposicaoVincendas');
+    var corpoComposicao = document.getElementById('corpoComposicaoVincendas');
+
+    if (!resultado || !container) return;
+    container.classList.remove('hidden');
+
+    var valorVincendas = Number(resultado.valorVincendas) || 0;
+    if (totalEl) totalEl.textContent = formatarMoedaAtualizacao(valorVincendas);
+    var originalVincendasEl = document.getElementById('totalOriginalParcelasVincendas');
+    var corrigidoVincendasEl = document.getElementById('totalCorrigidoParcelasVincendas');
+    var jurosVincendasEl = document.getElementById('totalJurosParcelasVincendas');
+    var selicVincendasEl = document.getElementById('totalSelicParcelasVincendas');
+    if (originalVincendasEl) originalVincendasEl.textContent = formatarMoedaAtualizacao(valorVincendas);
+    if (corrigidoVincendasEl) corrigidoVincendasEl.textContent = formatarMoedaAtualizacao(valorVincendas);
+    if (jurosVincendasEl) jurosVincendasEl.textContent = formatarMoedaAtualizacao(0);
+    if (selicVincendasEl) selicVincendasEl.textContent = formatarMoedaAtualizacao(0);
+    if (quantidadeEl) quantidadeEl.textContent = String(resultado.quantidadeParcelasVincendas || 0);
+
+    var metodo = window.parametrosFormacaoDemanda && window.parametrosFormacaoDemanda.metodoVincendas;
+
+    if (metodo === '1_parcela_anual') {
+        if (tabelaCompetencias) tabelaCompetencias.classList.add('hidden');
+        if (tabelaComposicao) tabelaComposicao.classList.remove('hidden');
+        if (!corpoComposicao) return;
+        corpoComposicao.innerHTML = '';
+
+        var composicao = resultado.composicaoVincendas || [];
+        composicao.forEach(function(item) {
+            var tr = document.createElement('tr');
+            tr.className = 'border-b border-slate-200';
+            var detalhe = item.detalhe || '';
+            var valorUnitario = formatarMoedaAtualizacao(item.valorUnitario);
+            var descricao = item.descricao;
+            if (detalhe) {
+                descricao += ' — ' + detalhe;
+            }
+            [descricao, String(item.quantidade), valorUnitario, formatarMoedaAtualizacao(item.total)].forEach(function(valor, i) {
+                var td = document.createElement('td');
+                td.className = 'p-3 ' + (i === 0 ? 'font-semibold text-slate-700' : 'text-right font-mono');
+                td.textContent = valor;
+                tr.appendChild(td);
+            });
+            corpoComposicao.appendChild(tr);
+        });
+        return;
+    }
+
+    if (tabelaComposicao) tabelaComposicao.classList.add('hidden');
+    if (tabelaCompetencias) tabelaCompetencias.classList.remove('hidden');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    (resultado.parcelasVincendas || []).forEach(function(parcela) {
+        var tr = document.createElement('tr');
+        tr.className = 'border-b border-slate-200 hover:bg-slate-50';
+        var valores = [
+            parcela.competencia,
+            formatarMoedaAtualizacao(parcela.valor),
+            '1,000000',
+            formatarMoedaAtualizacao(parcela.valor),
+            '0,00%',
+            formatarMoedaAtualizacao(0),
+            formatarMoedaAtualizacao(parcela.valor)
+        ];
+        valores.forEach(function(valor, i) {
+            var td = document.createElement('td');
+            td.className = 'p-3 ' + (i === 0 ? 'font-semibold' : 'text-right font-mono');
+            td.textContent = valor;
+            tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+    });
+}
+
+function renderizarFormacaoDemanda() {
+    var resultado = window.resultadoAjuizamento;
+    if (!resultado) return;
+
+    var valores = {
+        valorParcelaAjuizamento: resultado.parcelaAjuizamento,
+        valorVencidasAjuizamento: resultado.valorVencidasAjuizamento,
+        valorVincendasAjuizamento: resultado.valorVincendas,
+        valorDemandaAjuizamento: resultado.valorDemandaAjuizamento,
+        salarioMinimoAjuizamento: resultado.salarioMinimoAjuizamento,
+        limiteJuizado: resultado.limiteJuizado,
+        renunciaAjuizamento: resultado.renunciaAjuizamento,
+        valorAposRenuncia: resultado.valorAposRenuncia,
+        percentualAcordoAplicado: resultado.percentualAcordo,
+        valorAcordo: resultado.valorAcordo,
+        valorFinalAjuizamento: resultado.valorFinal
+    };
+
+    Object.keys(valores).forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+
+        if (id === 'percentualAcordoAplicado') {
+            el.textContent = Number(valores[id]).toLocaleString('pt-BR', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }) + '%';
+        } else if (id === 'salarioMinimoAjuizamento' || id === 'limiteJuizado') {
+            el.textContent = valores[id] === null || valores[id] === undefined
+                ? '—'
+                : formatarMoedaAtualizacao(valores[id]);
+        } else {
+            el.textContent = formatarMoedaAtualizacao(valores[id]);
+        }
+    });
+
+    renderizarParcelasVincendas();
+}
+
+function guia6AtualizarEstadoAcordo() {
+    var ativo = document.getElementById('acordoAtivo');
+    var preset = document.getElementById('percentualAcordoPreset');
+    var personalizado = document.getElementById('percentualAcordo');
+
+    if (!ativo || !preset || !personalizado) return;
+
+    var acordoAtivo = ativo.value === 'sim';
+    preset.disabled = !acordoAtivo;
+    personalizado.disabled = !acordoAtivo || preset.value !== 'personalizado';
+
+    if (!acordoAtivo) {
+        preset.value = '100';
+        personalizado.value = '100';
+    }
+}
+
+function guia6RecalcularAcordoImediato() {
+    // Recalcula somente o acordo a partir dos componentes já apurados em
+    // "Total após renúncia". Isso evita depender do recálculo completo das
+    // Guias 1–6 e elimina a condição de corrida que deixava a linha zerada.
+    var ativoEl = document.getElementById('acordoAtivo');
+    var presetEl = document.getElementById('percentualAcordoPreset');
+    var personalizadoEl = document.getElementById('percentualAcordo');
+    if (!ativoEl || !presetEl) return;
+
+    var ativo = ativoEl.value === 'sim';
+    var percentual = 100;
+    if (ativo) {
+        if (presetEl.value === 'personalizado') {
+            percentual = Number(personalizadoEl ? personalizadoEl.value : 100);
+        } else {
+            percentual = Number(presetEl.value);
+        }
+    }
+    if (!Number.isFinite(percentual)) percentual = 100;
+    percentual = Math.max(0, Math.min(100, percentual));
+
+    // Antes de aplicar o acordo, garanta que a base da renúncia esteja
+    // atualizada. A alteração do seletor dispara também o recálculo global
+    // assíncrono; se lermos o objeto no intervalo entre os dois eventos, os
+    // componentes podem ainda não existir e acabávamos gravando R$ 0,00.
+    if (window.resultadosAtualizacao && typeof calcularAtualizacaoValorRenunciado === 'function') {
+        try {
+            calcularAtualizacaoValorRenunciado();
+        } catch (e) {
+            console.warn('[ACORDO IMEDIATO] base da renúncia ainda não pôde ser recalculada:', e.message || e);
+        }
+    }
+
+    var r = window.resultadoAtualizacaoRenuncia || {};
+    var g5 = window.resultadosAtualizacao || {};
+    var principal = Number(r.totalAposRenunciaPrincipal);
+    var juros = Number(r.totalAposRenunciaJuros);
+    var selic = Number(r.totalAposRenunciaSelic);
+
+    // A estrutura oficial da renúncia calcula esses três componentes a partir
+    // da Guia 5. Use-a como fonte principal e mantenha o fallback para casos
+    // de JSON/versões anteriores sem os campos discriminados.
+    if (!Number.isFinite(principal)) {
+        principal = Math.max(0, Number(g5.totalCorrigido || 0) - Number(r.valorCorrigido || 0));
+    }
+    if (!Number.isFinite(juros)) {
+        juros = Math.max(0, Number(g5.totalJuros || 0) - Number(r.valorJuros || 0));
+    }
+    if (!Number.isFinite(selic)) {
+        selic = Math.max(0, Number(g5.totalSelic || 0) - Number(r.valorSelic || 0));
+    }
+
+    var acordo = calcularAcordo(
+        principal + juros + selic,
+        { acordoAtivo: ativo, percentualAcordo: percentual },
+        { principal: principal, juros: juros, selic: selic }
+    );
+
+    r.totalAposAcordoPrincipal = acordo.principalFinal;
+    r.totalAposAcordoJuros = acordo.jurosFinal;
+    r.totalAposAcordoSelic = acordo.selicFinal;
+    r.totalAposAcordo = acordo.totalFinal;
+    r.valorAcordoPrincipal = acordo.valorAcordoPrincipal;
+    r.valorAcordoJuros = acordo.valorAcordoJuros;
+    r.valorAcordoSelic = acordo.valorAcordoSelic;
+    r.valorAcordo = acordo.valorAcordo;
+    r.acordoAtivo = ativo;
+    r.percentualAcordo = acordo.percentual;
+    window.resultadoAtualizacaoRenuncia = r;
+
+    if (window.resultadoAjuizamento) {
+        window.resultadoAjuizamento.acordoAtivo = ativo;
+        window.resultadoAjuizamento.percentualAcordo = acordo.percentual;
+        window.resultadoAjuizamento.valorAcordo = acordo.valorAcordo;
+        window.resultadoAjuizamento.valorAcordoPrincipal = acordo.valorAcordoPrincipal;
+        window.resultadoAjuizamento.valorAcordoJuros = acordo.valorAcordoJuros;
+        window.resultadoAjuizamento.valorAcordoSelic = acordo.valorAcordoSelic;
+        window.resultadoAjuizamento.totalAposAcordoPrincipal = acordo.principalFinal;
+        window.resultadoAjuizamento.totalAposAcordoJuros = acordo.jurosFinal;
+        window.resultadoAjuizamento.totalAposAcordoSelic = acordo.selicFinal;
+        window.resultadoAjuizamento.totalAposAcordo = acordo.totalFinal;
+        window.resultadoAjuizamento.valorFinal = acordo.totalFinal;
+    }
+
+    renderizarAtualizacaoValorRenunciado();
+
+    // O requisitório deve enxergar imediatamente o novo valor.
+    if (typeof sincronizarRequisitorio === 'function') sincronizarRequisitorio();
+}
+
+function guia6InvalidarResultado() {
+    if (window.resultadoAjuizamento) {
+        window.resultadoAjuizamento.desatualizado = true;
+    }
+
+    var status = document.getElementById('statusFormacaoDemanda');
+    if (status) {
+        status.textContent = '⟳ Parâmetros alterados. Atualização automática em andamento.';
+        status.className = 'text-xs text-slate-500';
+    }
+}
+
+window.obterCompetenciaAjuizamento = obterCompetenciaAjuizamento;
+window.calcularAtualizacaoAteAjuizamento = calcularAtualizacaoAteAjuizamento;
+window.calcularParcelaAjuizamento = calcularParcelaAjuizamento;
+window.calcularVincendas = calcularVincendas;
+window.calcularLimiteJuizado = calcularLimiteJuizado;
+window.calcularRenunciaAjuizamento = calcularRenunciaAjuizamento;
+window.calcularAcordo = calcularAcordo;
+window.guia6RecalcularAcordoImediato = guia6RecalcularAcordoImediato;
+window.calcularAtualizacaoValorRenunciado = calcularAtualizacaoValorRenunciado;
+window.renderizarAtualizacaoValorRenunciado = renderizarAtualizacaoValorRenunciado;
+window.calcularFormacaoDemanda = calcularFormacaoDemanda;
+window.renderizarMemoriaAjuizamento = renderizarMemoriaAjuizamento;
+window.renderizarFormacaoDemanda = renderizarFormacaoDemanda;
+window.renderizarParcelasVincendas = renderizarParcelasVincendas;
+
+// =====================================================================
+// INICIALIZAÇÃO – DOMContentLoaded
+// =====================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    criarModalAdmin();
+
+    // Fase 1.9A – cálculo da Guia 6 ocorre automaticamente.
+
+    var btnTutorial = document.getElementById('btnAbrirTutorialFormacaoDemanda');
+    var modalTutorial = document.getElementById('modalTutorialFormacaoDemanda');
+    var btnFecharTutorial = document.getElementById('btnFecharTutorialFormacaoDemanda');
+
+    function abrirTutorialFormacaoDemanda() {
+        if (modalTutorial) modalTutorial.classList.remove('hidden');
+    }
+
+    function fecharTutorialFormacaoDemanda() {
+        if (modalTutorial) modalTutorial.classList.add('hidden');
+    }
+
+    if (btnTutorial) btnTutorial.addEventListener('click', abrirTutorialFormacaoDemanda);
+    if (btnFecharTutorial) btnFecharTutorial.addEventListener('click', fecharTutorialFormacaoDemanda);
+
+    var btnCalcularFormacao = document.getElementById('btnCalcularFormacaoDemanda');
+    if (btnCalcularFormacao) {
+        btnCalcularFormacao.addEventListener('click', function() {
+            calcularFormacaoDemanda();
+        });
+    }
+    if (modalTutorial) {
+        modalTutorial.addEventListener('click', function(e) {
+            if (e.target === modalTutorial) fecharTutorialFormacaoDemanda();
+        });
+    }
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && modalTutorial && !modalTutorial.classList.contains('hidden')) {
+            fecharTutorialFormacaoDemanda();
+        }
+    });
+
+    var btnMemoria = document.getElementById('btnToggleMemoriaAjuizamento');
+    if (btnMemoria) {
+        btnMemoria.addEventListener('click', function() {
+            var painel = document.getElementById('painelMemoriaAjuizamento');
+            var statusMemoria = document.getElementById('statusMemoriaAjuizamento');
+            var aberto = painel && !painel.classList.contains('hidden');
+
+            if (painel) painel.classList.toggle('hidden', aberto);
+            if (statusMemoria) statusMemoria.textContent = aberto ? 'Fechado' : 'Aberto';
+            var setaMemoria = document.getElementById('setaMemoriaAjuizamento');
+            if (setaMemoria) setaMemoria.textContent = aberto ? '▶' : '▼';
+        });
+    }
+
+    // Fase 1.9A – Parcelas vincendas como bloco recolhível, fechado por padrão.
+    var btnVincendas = document.getElementById('btnToggleParcelasVincendas');
+    if (btnVincendas) {
+        btnVincendas.addEventListener('click', function() {
+            var conteudo = document.getElementById('conteudoParcelasVincendas');
+            var statusVincendas = document.getElementById('statusParcelasVincendas');
+            var aberto = conteudo && !conteudo.classList.contains('hidden');
+
+            if (conteudo) conteudo.classList.toggle('hidden', aberto);
+            if (statusVincendas) statusVincendas.textContent = aberto ? 'Fechado' : 'Aberto';
+            var setaVincendas = document.getElementById('setaParcelasVincendas');
+            if (setaVincendas) setaVincendas.textContent = aberto ? '▶' : '▼';
+        });
+    }
+
+    var camposGuia6 = [
+        'metodoVincendas',
+        'tratamentoMesAjuizamento',
+        'incluir13Vincendas',
+        'limitarAoTeto',
+        'quantidadeSalariosMinimos',
+        'acordoAtivo',
+        'percentualAcordoPreset',
+        'percentualAcordo',
+        'dataAjuizamentoGuia6',
+        'dataAjuizamento'
+    ];
+
+    camposGuia6.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+
+        function sincronizarGuia6() {
+            if (id === 'dataAjuizamentoGuia6' || id === 'dataAjuizamento') {
+                guia6SincronizarDataAjuizamento(el);
+            }
+            // Alguns campos alteram outros controles da seção de acordo
+            // (por exemplo, desativar o acordo força 100%). Atualizamos a UI
+            // primeiro e, em seguida, coletamos o estado completo para que o
+            // objeto global reflita exatamente o que está na tela.
+            if (id === 'acordoAtivo' || id === 'percentualAcordoPreset') {
+                guia6AtualizarEstadoAcordo();
+            }
+
+            guia6ColetarParametrosFormacaoDemanda();
+            guia6InvalidarResultado();
+
+            // B58: os controles do ACORDO não disparam o recálculo global.
+            // O recálculo global podia terminar depois do cálculo imediato e
+            // sobrescrever "Total após acordo" com valores antigos/zero.
+            var campoEhAcordo = (id === 'acordoAtivo' || id === 'percentualAcordoPreset' || id === 'percentualAcordo');
+
+            if (!campoEhAcordo && typeof agendarRecalculoGlobal === 'function') {
+                agendarRecalculoGlobal();
+            }
+
+            if (campoEhAcordo) {
+                setTimeout(function() {
+                    guia6RecalcularAcordoImediato();
+                }, 0);
+            }
+        }
+
+        el.addEventListener('input', sincronizarGuia6);
+        el.addEventListener('change', sincronizarGuia6);
+    });
+
+    guia6AtualizarEstadoAcordo();
+    guia6SincronizarDataAjuizamento(document.getElementById('dataAjuizamento'));
+
+    document.addEventListener('keydown', function(e) {
+        var tag = e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'e') {
+            e.preventDefault();
+            var modal = document.getElementById('adminModal');
+            if (modal) {
+                modal.classList.remove('hidden');
+                var msgDiv = document.getElementById('adminMensagens');
+                if (msgDiv) {
+                    msgDiv.classList.add('hidden');
+                    msgDiv.textContent = '';
+                }
+                if (!window.INDEXADORES_ATUALIZACAO) {
+                    adminExibirMensagem(
+                        'Aviso: base de indexadores não carregada. Verifique data/indexadores.js.',
+                        'warning'
+                    );
+                }
+            }
+        }
+    });
+
+    // =====================================================================
+    // ACCORDION – Blocos de parâmetros recolhíveis
+    // =====================================================================
+    document.querySelectorAll('.accordion-toggle').forEach(function(toggle) {
+        toggle.addEventListener('click', function() {
+            var targetId = this.dataset.target;
+            var content = document.getElementById(targetId);
+            var icon = this.querySelector('.accordion-icon');
+            if (content) {
+                content.classList.toggle('hidden');
+                if (icon) {
+                    if (content.classList.contains('hidden')) {
+                        icon.textContent = '[+]';
+                    } else {
+                        icon.textContent = '[-]';
+                    }
+                }
+            }
+        });
+    });
+
+    var btnCorrecao = document.getElementById('btnCarregarCorrecao');
+    var fileCorrecao = document.getElementById('fileInputCorrecao');
+    if (btnCorrecao && fileCorrecao) {
+        btnCorrecao.addEventListener('click', function() {
+            fileCorrecao.click();
+        });
+        fileCorrecao.addEventListener('change', function(e) {
+            var file = e.target.files[0];
+            if (file) {
+                adminCarregarParametroGuia5(file, 'correcao_monetaria');
+            }
+            this.value = '';
+        });
+    }
+
+    var btnJurosSelic = document.getElementById('btnCarregarJurosSelic');
+    var fileJurosSelic = document.getElementById('fileInputJurosSelic');
+    if (btnJurosSelic && fileJurosSelic) {
+        btnJurosSelic.addEventListener('click', function() {
+            fileJurosSelic.click();
+        });
+        fileJurosSelic.addEventListener('change', function(e) {
+            var file = e.target.files[0];
+            if (file) {
+                adminCarregarParametroGuia5(file, 'juros_selic');
+            }
+            this.value = '';
+        });
+    }
+
+    // Reatribuir eventos aos botões .atalho-oficial (já existentes)
+    document.querySelectorAll('.atalho-oficial').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var nome = this.dataset.encadeamento;
+            carregarEncadeamentoOficial(nome);
+        });
+    });
+
+    var btnCalcular = document.getElementById('btnCalcularAtualizacao');
+    if (btnCalcular) {
+        btnCalcular.addEventListener('click', function() {
+            calcularAtualizacaoGuia5();
+        });
+    }
+
+    function configurarListenerDependencias(containerId, eventos) {
+        var container = document.getElementById(containerId);
+        if (!container) return;
+        eventos.forEach(function(evt) {
+            container.addEventListener(evt, function(e) {
+                // A Guia 4 possui células editáveis. Durante a digitação,
+                // não devemos disparar o recálculo global, pois ele reconstrói
+                // a tabela e faz o campo perder o foco/cursor. O recálculo da
+                // linha e do resumo é tratado pelo próprio blur da célula.
+                if (e.target && e.target.closest && e.target.closest('#corpoDiferencas')) {
+                    return;
+                }
+                if (typeof agendarRecalculoGlobal === 'function') {
+                    agendarRecalculoGlobal();
+                }
+            }, true);
+        });
+    }
+
+    configurarListenerDependencias('guia-entradas', ['input', 'change']);
+    configurarListenerDependencias('guia-beneficios-recebidos', ['input', 'change']);
+    configurarListenerDependencias('guia-diferencas', ['input', 'change']);
+    configurarListenerDependencias('guia-atualizacao', ['input', 'change']);
+
+    configurarSincronizacaoDatasAtualizacao();
+
+    document.querySelectorAll('.nav-guia button').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            if (this.dataset.guia === 'atualizacao') {
+                sincronizarParametrosAtualizacao();
+            }
+        });
+    });
+
+    var guiaAtiva = document.querySelector('.nav-guia button.ativo');
+    if (guiaAtiva && guiaAtiva.dataset.guia === 'atualizacao') {
+        sincronizarParametrosAtualizacao();
+    }
+
+    window.coletarDiferencasParaAtualizacao = coletarDiferencasParaAtualizacao;
+    window.sincronizarParametrosAtualizacao = sincronizarParametrosAtualizacao;
+    window.importarDiferencasGuia4ParaAtualizacao = importarDiferencasGuia4ParaAtualizacao;
+    window.limparDiferencasAtualizacao = limparDiferencasAtualizacao;
+});
