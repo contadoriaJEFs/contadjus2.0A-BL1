@@ -175,12 +175,44 @@
     }
 
     function normalizarCompetencia(valor) {
-        const m = String(valor ?? '').trim().match(/^(\d{1,2})\s*\/\s*(\d{4})$/);
-        if (!m) return null;
-        const mes = Number(m[1]);
-        const ano = Number(m[2]);
-        if (mes < 1 || mes > 12) return null;
-        return `${String(mes).padStart(2, '0')}/${ano}`;
+        let s = String(valor ?? '').trim().toLowerCase();
+        if (!s) return null;
+
+        // Formatos numéricos comuns: MM/AAAA, MM/AA, MM-AAAA, MM-AA.
+        let m = s.match(/^(\d{1,2})\s*[\/\-]\s*(\d{2}|\d{4})$/);
+        if (m) {
+            const mes = Number(m[1]);
+            let ano = Number(m[2]);
+            if (mes < 1 || mes > 12) return null;
+            if (String(m[2]).length === 2) ano += ano >= 50 ? 1900 : 2000;
+            return `${String(mes).padStart(2, '0')}/${ano}`;
+        }
+
+        // Datas completas eventualmente copiadas do Excel.
+        m = s.match(/^(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{2}|\d{4})$/);
+        if (m) {
+            const mes = Number(m[2]);
+            let ano = Number(m[3]);
+            if (mes < 1 || mes > 12) return null;
+            if (String(m[3]).length === 2) ano += ano >= 50 ? 1900 : 2000;
+            return `${String(mes).padStart(2, '0')}/${ano}`;
+        }
+
+        // Meses abreviados em português, como "jan/18", "fev/2019", etc.
+        const meses = {
+            jan: 1, janeiro: 1, fev: 2, fevereiro: 2, mar: 3, marco: 3, março: 3,
+            abr: 4, abril: 4, mai: 5, maio: 5, jun: 6, junho: 6,
+            jul: 7, julho: 7, ago: 8, agosto: 8, set: 9, setembro: 9,
+            out: 10, outubro: 10, nov: 11, novembro: 11, dez: 12, dezembro: 12
+        };
+        m = s.match(/^([a-zçãõ]+)\s*[\/\-]\s*(\d{2}|\d{4})$/);
+        if (m && meses[m[1]]) {
+            let ano = Number(m[2]);
+            if (String(m[2]).length === 2) ano += ano >= 50 ? 1900 : 2000;
+            return `${String(meses[m[1]]).padStart(2, '0')}/${ano}`;
+        }
+
+        return null;
     }
 
     function competenciaParaNumero(comp) {
