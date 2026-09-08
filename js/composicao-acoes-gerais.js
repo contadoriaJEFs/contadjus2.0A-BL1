@@ -10,6 +10,7 @@
         linhas: [{ competencia: '', valores: { 'valor-1': '' }, fontes: { 'valor-1': null } }]
     };
     let faixasLote = [{ id: novoId('faixa'), de: '', ate: '', colunaId: 'valor-1', valor: '' }];
+    let linhasSelecionadas = new Set();
 
     function novoId(prefixo) {
         return prefixo + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -47,8 +48,14 @@
         const thead = tabela.querySelector('thead');
         const tbody = tabela.querySelector('tbody');
 
+        const selecionadasValidas = new Set([...linhasSelecionadas].filter(i => Number.isInteger(i) && i >= 0 && i < estado.linhas.length));
+        linhasSelecionadas = selecionadasValidas;
+        const todasSelecionadas = estado.linhas.length > 0 && linhasSelecionadas.size === estado.linhas.length;
         thead.innerHTML = `
             <tr>
+                <th class="cag-th cag-select-col" title="Selecionar todas as competências">
+                    <input type="checkbox" class="cag-select-all" ${todasSelecionadas ? 'checked' : ''} aria-label="Selecionar todas as competências">
+                </th>
                 <th class="cag-th cag-comp-col">Competência</th>
                 ${estado.colunas.map(col => `
                     <th class="cag-th cag-value-col">
@@ -63,11 +70,15 @@
                             </div>
                         </div>
                     </th>`).join('')}
+                <th class="cag-th cag-row-actions-col">Ações</th>
                 <th class="cag-th cag-total-col">Total Devido</th>
             </tr>`;
 
         tbody.innerHTML = estado.linhas.map((linha, idx) => `
             <tr data-row-index="${idx}">
+                <td class="cag-td cag-select-col">
+                    <input type="checkbox" class="cag-row-select" data-row="${idx}" ${linhasSelecionadas.has(idx) ? 'checked' : ''} aria-label="Selecionar competência ${escapeHtml(linha.competencia || idx + 1)}">
+                </td>
                 <td class="cag-td cag-comp-col">
                     <input class="cag-cell cag-competencia" value="${escapeHtml(linha.competencia || '')}" placeholder="MM/AAAA" maxlength="7" data-row="${idx}">
                 </td>
@@ -75,6 +86,9 @@
                     <td class="cag-td cag-value-col">
                         <input class="cag-cell cag-valor ${col.tipo === 'debito' ? 'cag-cell-debito' : 'cag-cell-credito'}" inputmode="decimal" value="${escapeHtml(linha.valores?.[col.id] ?? '')}" placeholder="0,00" data-row="${idx}" data-col-id="${col.id}">
                     </td>`).join('')}
+                <td class="cag-td cag-row-actions-col">
+                    <button type="button" class="cag-remove-row" data-row="${idx}" title="Excluir esta competência" aria-label="Excluir esta competência">×</button>
+                </td>
                 <td class="cag-td cag-total-col cag-total-cell">R$ ${formatarMoeda(valorLinha(linha))}</td>
             </tr>`).join('');
 
@@ -101,6 +115,19 @@
         return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 
+    function formatarCompetenciaDigitada(valor) {
+        const original = String(valor ?? '');
+        const texto = original.trim();
+        if (!texto) return '';
+        // Permite digitar apenas 6 números: 012024 → 01/2024.
+        // Se já houver letras ou separador, preserva o conteúdo para permitir
+        // formatos como jan/24 na importação/edição.
+        if (/^\d{6}$/.test(texto)) return texto.slice(0, 2) + '/' + texto.slice(2);
+        const digitos = texto.replace(/\D/g, '');
+        if (/^\d{6}$/.test(digitos) && !/[a-z]/i.test(texto)) return digitos.slice(0, 2) + '/' + digitos.slice(2);
+        return texto;
+    }
+
     function adicionarLinha() {
         const valores = {};
         estado.colunas.forEach(col => valores[col.id] = '');
@@ -116,6 +143,33 @@
             estado.linhas[0] = { competencia: '', valores: Object.fromEntries(estado.colunas.map(c => [c.id, ''])), fontes: Object.fromEntries(estado.colunas.map(c => [c.id, null])) };
         } else {
             estado.linhas.pop();
+        }
+        renderizar();
+    }
+
+    function removerLinhaIndividual(idx) {
+        if (!Number.isInteger(idx) || idx < 0 || idx >= estado.linhas.length) return;
+        estado.linhas.splice(idx, 1);
+        linhasSelecionadas = new Set([...linhasSelecionadas].filter(i => i !== idx).map(i => i > idx ? i - 1 : i));
+        if (!estado.linhas.length) {
+            estado.linhas.push({ competencia: '', valores: Object.fromEntries(estado.colunas.map(c => [c.id, ''])), fontes: Object.fromEntries(estado.colunas.map(c => [c.id, null])) });
+        }
+        renderizar();
+    }
+
+    function removerLinhasSelecionadas() {
+        const indices = [...linhasSelecionadas].filter(i => i >= 0 && i < estado.linhas.length).sort((a, b) => b - a);
+        if (!indices.length) return;
+        const temDados = indices.some(i => {
+            const l = estado.linhas[i];
+            return String(l.competencia || '').trim() || estado.colunas.some(c => String(l.valores?.[c.id] ?? '').trim() !== '');
+        });
+        const mensagem = indices.length === 1 ? 'Excluir a competência selecionada?' : `Excluir as ${indices.length} competências selecionadas?`;
+        if (temDados && !confirm(mensagem + '\n\nOs dados dessas linhas serão removidos da composição.')) return;
+        indices.forEach(i => estado.linhas.splice(i, 1));
+        linhasSelecionadas.clear();
+        if (!estado.linhas.length) {
+            estado.linhas.push({ competencia: '', valores: Object.fromEntries(estado.colunas.map(c => [c.id, ''])), fontes: Object.fromEntries(estado.colunas.map(c => [c.id, null])) });
         }
         renderizar();
     }
@@ -162,6 +216,7 @@
             fontes: Object.fromEntries(colunas.map(c => [c.id, l.fontes?.[c.id] ?? null]))
         }));
         estado = { colunas, linhas: linhas.length ? linhas : [{ competencia: '', valores: Object.fromEntries(colunas.map(c => [c.id, ''])) }] };
+        linhasSelecionadas.clear();
         faixasLote = [{ id: novoId('faixa'), de: '', ate: '', colunaId: colunas[0].id, valor: '' }];
         renderizar();
         renderizarFaixasLote();
@@ -540,6 +595,14 @@
         if (modal) modal.classList.remove('hidden');
     }
 
+    function atualizarControlesSelecao() {
+        const btn = document.getElementById('btnCagRemoverSelecionadas');
+        if (!btn) return;
+        const n = linhasSelecionadas.size;
+        btn.disabled = n === 0;
+        btn.textContent = n ? `Excluir selecionadas (${n})` : 'Excluir selecionadas';
+    }
+
     function inicializar() {
         const container = document.getElementById('composicaoAcoesGerais');
         if (!container || container.dataset.iniciado === '1') return;
@@ -547,7 +610,14 @@
 
         container.addEventListener('input', e => {
             const row = e.target.dataset.row;
-            if (e.target.classList.contains('cag-competencia')) estado.linhas[row].competencia = e.target.value;
+            if (e.target.classList.contains('cag-competencia')) {
+                const formatado = formatarCompetenciaDigitada(e.target.value);
+                if (formatado !== e.target.value) {
+                    e.target.value = formatado;
+                    try { e.target.setSelectionRange(formatado.length, formatado.length); } catch (_) {}
+                }
+                estado.linhas[row].competencia = e.target.value;
+            }
             if (e.target.classList.contains('cag-valor')) {
                 estado.linhas[row].valores[e.target.dataset.colId] = e.target.value;
                 if (!estado.linhas[row].fontes) estado.linhas[row].fontes = {};
@@ -572,14 +642,37 @@
             if (btnCol) removerColuna(btnCol.dataset.colId);
             const btnFaixa = e.target.closest('.cag-lote-remover');
             if (btnFaixa) removerFaixaLote(Number(btnFaixa.dataset.loteIndex));
+            const btnRow = e.target.closest('.cag-remove-row');
+            if (btnRow) removerLinhaIndividual(Number(btnRow.dataset.row));
+        });
+        container.addEventListener('change', e => {
+            if (e.target.classList.contains('cag-row-select')) {
+                const idx = Number(e.target.dataset.row);
+                if (e.target.checked) linhasSelecionadas.add(idx);
+                else linhasSelecionadas.delete(idx);
+                atualizarResumo();
+                atualizarControlesSelecao();
+            }
+            if (e.target.classList.contains('cag-select-all')) {
+                linhasSelecionadas.clear();
+                if (e.target.checked) estado.linhas.forEach((_, idx) => linhasSelecionadas.add(idx));
+                renderizar();
+            }
         });
 
         const lote = document.getElementById('cagFaixasLote');
         lote?.addEventListener('input', e => {
             const idx = Number(e.target.dataset.loteIndex);
             if (!Number.isInteger(idx) || !faixasLote[idx]) return;
-            if (e.target.classList.contains('cag-lote-de')) faixasLote[idx].de = e.target.value;
-            if (e.target.classList.contains('cag-lote-ate')) faixasLote[idx].ate = e.target.value;
+            if (e.target.classList.contains('cag-lote-de') || e.target.classList.contains('cag-lote-ate')) {
+                const formatado = formatarCompetenciaDigitada(e.target.value);
+                if (formatado !== e.target.value) {
+                    e.target.value = formatado;
+                    try { e.target.setSelectionRange(formatado.length, formatado.length); } catch (_) {}
+                }
+                if (e.target.classList.contains('cag-lote-de')) faixasLote[idx].de = e.target.value;
+                else faixasLote[idx].ate = e.target.value;
+            }
             if (e.target.classList.contains('cag-lote-valor-input')) faixasLote[idx].valor = e.target.value;
         });
         lote?.addEventListener('change', e => {
@@ -602,6 +695,7 @@
 
         document.getElementById('btnCagAdicionarLinha')?.addEventListener('click', adicionarLinha);
         document.getElementById('btnCagRemoverLinha')?.addEventListener('click', removerLinha);
+        document.getElementById('btnCagRemoverSelecionadas')?.addEventListener('click', removerLinhasSelecionadas);
         document.getElementById('btnCagAdicionarColuna')?.addEventListener('click', adicionarColuna);
         document.getElementById('btnCagAdicionarFaixa')?.addEventListener('click', adicionarFaixaLote);
         document.getElementById('btnCagAplicarLote')?.addEventListener('click', aplicarPreenchimentoLote);
@@ -622,6 +716,7 @@
         document.getElementById('fecharTutorialAcoesGerais2')?.addEventListener('click', () => document.getElementById('modalTutorialAcoesGerais')?.classList.add('hidden'));
         renderizar();
         renderizarFaixasLote();
+        atualizarControlesSelecao();
     }
 
     window.contadjusAcoesGerais = {

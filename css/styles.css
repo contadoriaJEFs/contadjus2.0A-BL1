@@ -3429,6 +3429,14 @@
 .cag-td { border:1px solid #cbd5e1; padding:5px 6px; background:#fff; }
 .cag-table tbody tr:nth-child(even) .cag-td { background:#f1f5f9; }
 .cag-comp-col { min-width:110px; width:120px; }
+.cag-select-col { width:42px; min-width:42px; text-align:center; }
+.cag-row-actions-col { width:58px; min-width:58px; text-align:center; }
+.cag-select-col input[type="checkbox"] { width:15px; height:15px; cursor:pointer; accent-color:#2563eb; }
+.cag-remove-row { width:28px; height:28px; border:1px solid #fecaca; border-radius:5px; background:#fff; color:#dc2626; font-size:18px; line-height:24px; cursor:pointer; }
+.cag-remove-row:hover { background:#fef2f2; border-color:#fca5a5; }
+.cag-btn-danger { color:#b91c1c; border-color:#fecaca; background:#fff; }
+.cag-btn-danger:hover:not(:disabled) { background:#fef2f2; }
+.cag-btn-danger:disabled { opacity:.45; cursor:default; }
 .cag-value-col { min-width:150px; }
 .cag-total-col { min-width:135px; width:145px; }
 .cag-header-editor { display:flex; flex-direction:column; gap:5px; }
