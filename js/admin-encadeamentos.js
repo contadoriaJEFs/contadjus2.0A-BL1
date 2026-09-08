@@ -5002,14 +5002,20 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    var btnSincronizar = document.getElementById('btnSincronizarDiferencasGuia4');
-    if (btnSincronizar) {
-        btnSincronizar.addEventListener('click', function() {
-            if (typeof importarDiferencasGuia4ParaAtualizacao === 'function') {
-                importarDiferencasGuia4ParaAtualizacao();
-            }
-        });
-    }
+    // Fase 2.0A: a Guia 4 é a fonte única das diferenças nas Ações Condenatórias.
+    // Toda alteração na composição atualiza imediatamente o estado consumido pela Guia 5,
+    // sem exigir botão de sincronização. A tabela da Guia 5 é renderizada quando a guia
+    // é aberta, evitando reconstruções enquanto o usuário ainda edita a Guia 4.
+    document.addEventListener('contadjus:guia4-composicao-alterada', function() {
+        if ((document.getElementById('tipoAcao')?.value || '') !== 'condenatoria') return;
+        if (!window.contadjusAcoesGerais || typeof coletarDiferencasParaAtualizacao !== 'function') return;
+        try {
+            window.diferencasAtualizacaoAtual = coletarDiferencasParaAtualizacao();
+            atualizarBotoesAtualizacao();
+        } catch (e) {
+            console.warn('[Guia 5] Falha ao atualizar automaticamente as diferenças da Guia 4.', e);
+        }
+    });
 
     var btnCalcular = document.getElementById('btnCalcularAtualizacao');
     if (btnCalcular) {

@@ -147,6 +147,14 @@
         el.textContent = `${preenchidas} competência(s) • ${estado.colunas.length}/6 colunas de composição • Total: R$ ${formatarMoeda(total)}`;
     }
 
+    let notificacaoPendente = null;
+    function notificarAlteracaoGuia4() {
+        clearTimeout(notificacaoPendente);
+        notificacaoPendente = setTimeout(() => {
+            document.dispatchEvent(new CustomEvent('contadjus:guia4-composicao-alterada'));
+        }, 120);
+    }
+
     function atualizarLinha(rowIndex) {
         const tr = document.querySelector(`#tabelaComposicaoAcoesGerais tbody tr[data-row-index="${rowIndex}"]`);
         if (!tr) return;
@@ -178,6 +186,7 @@
         const fontes = {}; estado.colunas.forEach(col => fontes[col.id] = null);
         estado.linhas.push({ competencia: '', valores, fontes });
         renderizar();
+        notificarAlteracaoGuia4();
         const inputs = document.querySelectorAll('#tabelaComposicaoAcoesGerais .cag-competencia');
         inputs[inputs.length - 1]?.focus();
     }
@@ -189,6 +198,7 @@
             estado.linhas.pop();
         }
         renderizar();
+        notificarAlteracaoGuia4();
     }
 
     function removerLinhaIndividual(idx) {
@@ -201,6 +211,7 @@
             estado.linhas.push({ competencia: '', valores: Object.fromEntries(estado.colunas.map(c => [c.id, ''])), fontes: Object.fromEntries(estado.colunas.map(c => [c.id, null])) });
         }
         renderizar();
+        notificarAlteracaoGuia4();
     }
 
     function removerLinhasSelecionadas() {
@@ -219,6 +230,7 @@
             estado.linhas.push({ competencia: '', valores: Object.fromEntries(estado.colunas.map(c => [c.id, ''])), fontes: Object.fromEntries(estado.colunas.map(c => [c.id, null])) });
         }
         renderizar();
+        notificarAlteracaoGuia4();
     }
 
     function adicionarColuna() {
@@ -231,6 +243,7 @@
         estado.linhas.forEach(linha => { linha.valores[id] = ''; if (!linha.fontes) linha.fontes = {}; linha.fontes[id] = null; });
         renderizar();
         renderizarFaixasLote();
+        notificarAlteracaoGuia4();
     }
 
     function removerColuna(id) {
@@ -243,6 +256,7 @@
         faixasLote.forEach(faixa => { if (faixa.colunaId === id) faixa.colunaId = estado.colunas[0]?.id || ''; });
         renderizar();
         renderizarFaixasLote();
+        notificarAlteracaoGuia4();
     }
 
     function obterDados() {
@@ -728,6 +742,7 @@
             }
             if (row !== undefined) atualizarLinha(Number(row));
             atualizarResumo();
+            notificarAlteracaoGuia4();
         });
         container.addEventListener('change', e => {
             if (e.target.classList.contains('cag-column-name')) {
@@ -738,6 +753,9 @@
                 const col = estado.colunas.find(c => c.id === e.target.dataset.colId);
                 if (col) col.tipo = e.target.value === 'debito' ? 'debito' : 'credito';
                 renderizar();
+            }
+            if (e.target.classList.contains('cag-column-name') || e.target.classList.contains('cag-column-type')) {
+                notificarAlteracaoGuia4();
             }
         });
         container.addEventListener('mousedown', e => {
