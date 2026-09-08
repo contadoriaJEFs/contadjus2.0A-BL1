@@ -365,10 +365,34 @@
             const h = normalizarCabecalho(nome);
             const valores = info.dados.map(l => l[i] ?? '');
             const qtdCompetencias = valores.filter(v => !!normalizarCompetencia(v)).length;
+
             if (h.includes('compet') || qtdCompetencias >= Math.max(1, Math.ceil(valores.length * 0.7))) return 'competencia';
+
+            // Total Devido é calculado pelo ContadJus e nunca deve ser importado
+            // como uma coluna de composição.
+            if ((h.includes('total') && h.includes('devido')) || h === 'total') return 'ignorar-total';
+
             const existente = estado.colunas.find(c => normalizarCabecalho(c.nome) === h);
-            return existente ? `coluna:${existente.id}` : 'novo';
+            if (existente) return `coluna:${existente.id}`;
+
+            // Tentativa conservadora de identificar colunas que representam
+            // descontos/deduções. O usuário continua podendo revisar o destino.
+            const pareceDebito = /(desconto|descontar|deducao|deduzir|abatimento|retencao|debito|a descontar)/.test(h);
+            return pareceDebito ? 'novo:debito' : 'novo:credito';
         });
+    }
+
+    function obterOpcoesMapeamento(mapeamento) {
+        const opcoesColunas = estado.colunas.map((c, idx) =>
+            `<option value="coluna:${escapeHtml(c.id)}" ${mapeamento === `coluna:${c.id}` ? 'selected' : ''}>${idx + 1}. ${escapeHtml(c.nome)} ${c.tipo === 'debito' ? '−' : '+'}</option>`
+        ).join('');
+        return `
+            <option value="ignorar" ${mapeamento === 'ignorar' ? 'selected' : ''}>Não importar</option>
+            <option value="ignorar-total" ${mapeamento === 'ignorar-total' ? 'selected' : ''}>Total Devido — automático (não importar)</option>
+            <option value="competencia" ${mapeamento === 'competencia' ? 'selected' : ''}>Competência</option>
+            ${opcoesColunas}
+            <option value="novo:credito" ${mapeamento === 'novo:credito' ? 'selected' : ''}>Criar nova coluna — Crédito (+)</option>
+            <option value="novo:debito" ${mapeamento === 'novo:debito' ? 'selected' : ''}>Criar nova coluna — Débito (−)</option>`;
     }
 
     function abrirImportacaoPlanilha() {
@@ -376,13 +400,25 @@
         if (!modal) return;
         modal.classList.remove('hidden');
         const ta = document.getElementById('cagPlanilhaTexto');
-        if (ta) { ta.value = ''; ta.focus(); }
-        limparPreviaImportacao();
+        const body = modal.querySelector('.cag-import-body');
+        if (body) body.scrollTop = 0;
+
+        // O rascunho da importação permanece enquanto não for efetivamente
+        // aplicado. Assim, fechar e abrir o modal não destrói o trabalho.
+        if (importacaoPlanilha && importacaoPlanilha.texto) {
+            if (ta) ta.value = importacaoPlanilha.texto;
+            renderizarPreviaImportacao(false);
+        } else {
+            if (ta) { ta.value = ''; ta.focus(); }
+            limparPreviaImportacao();
+        }
     }
 
     function fecharImportacaoPlanilha() {
-        document.getElementById('modalImportarPlanilhaAcoesGerais')?.classList.add('hidden');
-        importacaoPlanilha = null;
+        const modal = document.getElementById('modalImportarPlanilhaAcoesGerais');
+        modal?.classList.add('hidden');
+        // Não limpar importacaoPlanilha: ela é um rascunho deliberado e será
+        // restaurada na próxima abertura.
     }
 
     function limparPreviaImportacao() {
@@ -392,25 +428,24 @@
         if (acao) acao.disabled = true;
     }
 
-    function renderizarPreviaImportacao() {
+    function renderizarPreviaImportacao(recalcularMapeamentos = true) {
         const ta = document.getElementById('cagPlanilhaTexto');
         const area = document.getElementById('cagPlanilhaPrevia');
         const acao = document.getElementById('btnCagAplicarImportacao');
         if (!ta || !area || !acao) return;
         const info = analisarColagem(ta.value);
         if (!info) { importacaoPlanilha = null; limparPreviaImportacao(); return; }
-        const mapeamentos = sugerirMapeamentos(info);
-        importacaoPlanilha = { info, mapeamentos };
+        const mapeamentos = (!recalcularMapeamentos && importacaoPlanilha && importacaoPlanilha.texto === ta.value)
+            ? importacaoPlanilha.mapeamentos.slice()
+            : sugerirMapeamentos(info);
+        importacaoPlanilha = { info, mapeamentos, texto: ta.value };
         area.innerHTML = `
-            <div class="cag-import-summary"><strong>${info.dados.length} linha(s)</strong> • <strong>${info.qtdColunas} coluna(s)</strong> reconhecida(s)${info.temCabecalho ? ' • cabeçalho identificado' : ' • sem cabeçalho'}</div>
+            <div class="cag-import-summary"><strong>${info.dados.length} linha(s)</strong> • <strong>${info.qtdColunas} coluna(s)</strong> reconhecida(s)${info.temCabecalho ? ' • cabeçalho identificado' : ' • sem cabeçalho'} • revise o destino antes de aplicar</div>
             <div class="cag-import-map">${info.cabecalhos.map((nome, i) => `
                 <div class="cag-import-map-row">
                     <div class="cag-import-col-source"><strong>Coluna ${i + 1}</strong><span>${escapeHtml(nome)}</span></div>
                     <select class="cag-import-destino" data-import-col="${i}">
-                        <option value="ignorar">Não importar</option>
-                        <option value="competencia" ${mapeamentos[i] === 'competencia' ? 'selected' : ''}>Competência</option>
-                        ${estado.colunas.map(c => `<option value="coluna:${escapeHtml(c.id)}" ${mapeamentos[i] === `coluna:${c.id}` ? 'selected' : ''}>${escapeHtml(c.nome)} ${c.tipo === 'debito' ? '−' : '+'}</option>`).join('')}
-                        <option value="novo" ${mapeamentos[i] === 'novo' ? 'selected' : ''}>Criar nova coluna</option>
+                        ${obterOpcoesMapeamento(mapeamentos[i])}
                     </select>
                 </div>`).join('')}</div>
             <div class="cag-import-table-wrap"><table class="cag-import-table"><thead><tr>${info.cabecalhos.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${info.dados.slice(0, 8).map(l => `<tr>${l.map(v => `<td>${escapeHtml(v)}</td>`).join('')}</tr>`).join('')}</tbody></table>${info.dados.length > 8 ? '<small>Prévia limitada às primeiras 8 linhas.</small>' : ''}</div>`;
@@ -423,16 +458,16 @@
         const destinos = selects.map(s => s.value);
         const competenciaCount = destinos.filter(v => v === 'competencia').length;
         if (competenciaCount !== 1) { alert('Selecione exatamente uma coluna como Competência.'); return; }
-        const novos = destinos.filter(v => v === 'novo').length;
+        const novos = destinos.filter(v => v === 'novo:credito' || v === 'novo:debito').length;
         if (estado.colunas.length + novos > MAX_COLUNAS) { alert(`A importação criaria ${novos} nova(s) coluna(s), mas o limite é de 6 colunas de composição.`); return; }
 
         const nomesNovos = {};
         let novaColunaIndex = 0;
         destinos.forEach((d, i) => {
-            if (d === 'novo') {
+            if (d === 'novo:credito' || d === 'novo:debito') {
                 const base = importacaoPlanilha.info.cabecalhos[i] || `Valor ${estado.colunas.length + novaColunaIndex + 1}`;
                 const id = novoId('valor');
-                estado.colunas.push({ id, nome: base.trim() || `Valor ${estado.colunas.length + 1}`, tipo: 'credito' });
+                estado.colunas.push({ id, nome: base.trim() || `Valor ${estado.colunas.length + 1}`, tipo: d === 'novo:debito' ? 'debito' : 'credito' });
                 nomesNovos[i] = id;
                 novaColunaIndex++;
             }
@@ -453,8 +488,8 @@
                 estado.linhas.push(linha); mapa.set(comp, linha);
             }
             destinos.forEach((d, i) => {
-                const colId = d.startsWith('coluna:') ? d.slice(7) : (d === 'novo' ? nomesNovos[i] : null);
-                if (!colId || d === 'competencia' || d === 'ignorar') return;
+                const colId = d.startsWith('coluna:') ? d.slice(7) : ((d === 'novo:credito' || d === 'novo:debito') ? nomesNovos[i] : null);
+                if (!colId || d === 'competencia' || d === 'ignorar' || d === 'ignorar-total') return;
                 linha.valores[colId] = String(reg[i] ?? '').trim();
                 linha.fontes[colId] = 'planilha';
             });
@@ -462,6 +497,9 @@
         estado.linhas.sort((a, b) => (competenciaParaNumero(a.competencia) ?? Infinity) - (competenciaParaNumero(b.competencia) ?? Infinity));
         renderizar();
         renderizarFaixasLote();
+        importacaoPlanilha = null;
+        const ta = document.getElementById('cagPlanilhaTexto');
+        if (ta) ta.value = '';
         fecharImportacaoPlanilha();
     }
 
@@ -540,10 +578,12 @@
         document.getElementById('cancelarImportacaoPlanilhaAcoesGerais')?.addEventListener('click', fecharImportacaoPlanilha);
         document.getElementById('btnCagAnalisarPlanilha')?.addEventListener('click', renderizarPreviaImportacao);
         document.getElementById('btnCagAplicarImportacao')?.addEventListener('click', aplicarImportacaoPlanilha);
-        document.getElementById('cagPlanilhaTexto')?.addEventListener('paste', () => setTimeout(renderizarPreviaImportacao, 30));
-        document.getElementById('cagPlanilhaTexto')?.addEventListener('input', renderizarPreviaImportacao);
+        document.getElementById('cagPlanilhaTexto')?.addEventListener('paste', () => setTimeout(() => renderizarPreviaImportacao(true), 30));
+        document.getElementById('cagPlanilhaTexto')?.addEventListener('input', () => renderizarPreviaImportacao(true));
         document.getElementById('cagPlanilhaPrevia')?.addEventListener('change', e => {
-            if (e.target.classList.contains('cag-import-destino') && importacaoPlanilha) importacaoPlanilha.mapeamentos[Number(e.target.dataset.importCol)] = e.target.value;
+            if (e.target.classList.contains('cag-import-destino') && importacaoPlanilha) {
+                importacaoPlanilha.mapeamentos[Number(e.target.dataset.importCol)] = e.target.value;
+            }
         });
         document.getElementById('btnCagTutorial')?.addEventListener('click', mostrarTutorial);
         document.getElementById('fecharTutorialAcoesGerais')?.addEventListener('click', () => document.getElementById('modalTutorialAcoesGerais')?.classList.add('hidden'));
