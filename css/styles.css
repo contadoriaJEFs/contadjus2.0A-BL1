@@ -3789,3 +3789,23 @@
     .cag-import-map-row { grid-template-columns:1fr; }
     .cag-import-modal { max-height:94vh; }
 }
+
+/* 2.0A — seleção tipo planilha e ajuda contextual */
+#composicaoAcoesGerais .cag-select-col { width: 42px; min-width:42px; text-align:center; cursor: crosshair; user-select:none; }
+#composicaoAcoesGerais tbody tr.cag-row-selected .cag-td { background:#dbeafe !important; }
+#composicaoAcoesGerais tbody tr.cag-row-selected .cag-cell-credito { background:#e0efff; }
+#composicaoAcoesGerais tbody tr.cag-row-selected .cag-cell-debito { background:#feecec; }
+#composicaoAcoesGerais .cag-select-all { cursor:pointer; }
+#composicaoAcoesGerais .cag-info-icon { border:0; background:transparent; color:#94a3b8; opacity:.6; cursor:pointer; font-size:13px; padding:1px 3px; line-height:1; }
+#composicaoAcoesGerais .cag-info-icon:hover { opacity:1; color:#475569; }
+#composicaoAcoesGerais .cag-th { position:relative; }
+#composicaoAcoesGerais .cag-info-col { position:absolute; top:5px; right:5px; z-index:2; }
+#composicaoAcoesGerais .cag-header-editor { padding-top:2px; }
+#composicaoAcoesGerais .cag-lote-head strong { display:flex; align-items:center; gap:3px; }
+.cag-tutorial-modal { max-height:88vh; overflow:auto; }
+.cag-tutorial-close { border:1px solid #cbd5e1; background:#fff; color:#64748b; width:32px; height:32px; border-radius:7px; font-size:22px; line-height:1; cursor:pointer; }
+.cag-tutorial-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.cag-tutorial-grid section { border:1px solid #e2e8f0; border-radius:8px; padding:12px; background:#f8fafc; }
+.cag-tutorial-grid h4 { margin:0 0 7px; color:#1e3a5f; font-size:13px; font-weight:700; }
+.cag-tutorial-grid ul { margin:0; padding-left:18px; color:#475569; font-size:12px; line-height:1.55; }
+@media (max-width:700px) { .cag-tutorial-grid { grid-template-columns:1fr; } }

@@ -11,6 +11,8 @@
     };
     let faixasLote = [{ id: novoId('faixa'), de: '', ate: '', colunaId: 'valor-1', valor: '' }];
     let linhasSelecionadas = new Set();
+    let selecaoAnchor = null;
+    let selecaoArrastando = false;
 
     function novoId(prefixo) {
         return prefixo + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -59,6 +61,7 @@
                 <th class="cag-th cag-comp-col">Competência</th>
                 ${estado.colunas.map(col => `
                     <th class="cag-th cag-value-col">
+                        <button type="button" class="cag-info-icon cag-info-col" title="Como funciona esta coluna" aria-label="Como funciona esta coluna">ⓘ</button>
                         <div class="cag-header-editor">
                             <input class="cag-column-name" data-col-id="${col.id}" value="${escapeHtml(col.nome)}" aria-label="Nome da coluna">
                             <div class="cag-column-controls">
@@ -93,6 +96,7 @@
             </tr>`).join('');
 
         atualizarResumo();
+        atualizarControlesSelecao();
     }
 
     function atualizarResumo() {
@@ -151,6 +155,8 @@
         if (!Number.isInteger(idx) || idx < 0 || idx >= estado.linhas.length) return;
         estado.linhas.splice(idx, 1);
         linhasSelecionadas = new Set([...linhasSelecionadas].filter(i => i !== idx).map(i => i > idx ? i - 1 : i));
+        if (selecaoAnchor === idx) selecaoAnchor = null;
+        else if (selecaoAnchor !== null && selecaoAnchor > idx) selecaoAnchor--;
         if (!estado.linhas.length) {
             estado.linhas.push({ competencia: '', valores: Object.fromEntries(estado.colunas.map(c => [c.id, ''])), fontes: Object.fromEntries(estado.colunas.map(c => [c.id, null])) });
         }
@@ -168,6 +174,7 @@
         if (temDados && !confirm(mensagem + '\n\nOs dados dessas linhas serão removidos da composição.')) return;
         indices.forEach(i => estado.linhas.splice(i, 1));
         linhasSelecionadas.clear();
+        selecaoAnchor = null;
         if (!estado.linhas.length) {
             estado.linhas.push({ competencia: '', valores: Object.fromEntries(estado.colunas.map(c => [c.id, ''])), fontes: Object.fromEntries(estado.colunas.map(c => [c.id, null])) });
         }
@@ -603,6 +610,46 @@
         btn.textContent = n ? `Excluir selecionadas (${n})` : 'Excluir selecionadas';
     }
 
+    function selecionarIntervalo(inicio, fim, adicionar = false) {
+        const a = Math.min(inicio, fim);
+        const b = Math.max(inicio, fim);
+        if (!adicionar) linhasSelecionadas.clear();
+        for (let i = a; i <= b; i++) linhasSelecionadas.add(i);
+    }
+
+    function atualizarSelecaoVisual() {
+        document.querySelectorAll('#tabelaComposicaoAcoesGerais tbody tr[data-row-index]').forEach(tr => {
+            const idx = Number(tr.dataset.rowIndex);
+            const selecionada = linhasSelecionadas.has(idx);
+            tr.classList.toggle('cag-row-selected', selecionada);
+            const cb = tr.querySelector('.cag-row-select');
+            if (cb) cb.checked = selecionada;
+        });
+        const all = document.querySelector('.cag-select-all');
+        if (all) {
+            all.checked = estado.linhas.length > 0 && linhasSelecionadas.size === estado.linhas.length;
+            all.indeterminate = linhasSelecionadas.size > 0 && linhasSelecionadas.size < estado.linhas.length;
+        }
+        atualizarControlesSelecao();
+    }
+
+    function selecionarLinhaPorClique(idx, event) {
+        if (!Number.isInteger(idx)) return;
+        const adicionar = event.ctrlKey || event.metaKey;
+        if (event.shiftKey && selecaoAnchor !== null) {
+            selecionarIntervalo(selecaoAnchor, idx, adicionar);
+        } else if (adicionar) {
+            if (linhasSelecionadas.has(idx)) linhasSelecionadas.delete(idx);
+            else linhasSelecionadas.add(idx);
+            selecaoAnchor = idx;
+        } else {
+            linhasSelecionadas.clear();
+            linhasSelecionadas.add(idx);
+            selecaoAnchor = idx;
+        }
+        atualizarSelecaoVisual();
+    }
+
     function inicializar() {
         const container = document.getElementById('composicaoAcoesGerais');
         if (!container || container.dataset.iniciado === '1') return;
@@ -637,7 +684,33 @@
                 renderizar();
             }
         });
+        container.addEventListener('mousedown', e => {
+            const handle = e.target.closest('.cag-select-col');
+            if (!handle || !handle.closest('tbody')) return;
+            const tr = handle.closest('tr[data-row-index]');
+            if (!tr) return;
+            const idx = Number(tr.dataset.rowIndex);
+            if (e.button !== 0) return;
+            selecaoArrastando = true;
+            selecionarLinhaPorClique(idx, e);
+            e.preventDefault();
+        });
+        container.addEventListener('mouseenter', e => {
+            if (!selecaoArrastando) return;
+            const handle = e.target.closest('.cag-select-col');
+            if (!handle || !handle.closest('tbody')) return;
+            const tr = handle.closest('tr[data-row-index]');
+            if (!tr) return;
+            const idx = Number(tr.dataset.rowIndex);
+            if (!Number.isInteger(selecaoAnchor)) return;
+            selecionarIntervalo(selecaoAnchor, idx, false);
+            atualizarSelecaoVisual();
+        }, true);
+        document.addEventListener('mouseup', () => { selecaoArrastando = false; }, { passive: true });
+
         container.addEventListener('click', e => {
+            const info = e.target.closest('.cag-info-icon');
+            if (info) { mostrarTutorial(); return; }
             const btnCol = e.target.closest('.cag-remove-col');
             if (btnCol) removerColuna(btnCol.dataset.colId);
             const btnFaixa = e.target.closest('.cag-lote-remover');
@@ -650,12 +723,13 @@
                 const idx = Number(e.target.dataset.row);
                 if (e.target.checked) linhasSelecionadas.add(idx);
                 else linhasSelecionadas.delete(idx);
-                atualizarResumo();
-                atualizarControlesSelecao();
+                selecaoAnchor = idx;
+                atualizarSelecaoVisual();
             }
             if (e.target.classList.contains('cag-select-all')) {
                 linhasSelecionadas.clear();
                 if (e.target.checked) estado.linhas.forEach((_, idx) => linhasSelecionadas.add(idx));
+                selecaoAnchor = e.target.checked && estado.linhas.length ? 0 : null;
                 renderizar();
             }
         });

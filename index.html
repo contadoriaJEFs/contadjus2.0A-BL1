@@ -1525,17 +1525,53 @@ Competência	Principal	Desconto
     <!-- TUTORIAL — AÇÕES CONDENATÓRIAS EM GERAL (FASE 2.0A) -->
     <!-- ============================================================ -->
     <div id="modalTutorialAcoesGerais" class="fixed inset-0 bg-black/50 flex items-center justify-center hidden z-50 modal-overlay">
-        <div class="bg-white p-6 rounded-xl max-w-lg w-full mx-4 shadow-xl">
-            <h3 class="text-lg font-bold text-slate-800 mb-2">Como funciona a composição</h3>
-            <ul class="text-sm text-slate-600 space-y-2 list-disc pl-5">
-                <li>A tabela começa com uma coluna de valor.</li>
-                <li>Você pode adicionar até <strong>5 colunas</strong>, totalizando 6.</li>
-                <li>No cabeçalho, defina o nome e se cada coluna é <strong>Crédito (+)</strong> ou <strong>Débito (−)</strong>.</li>
-                <li>O <strong>Total Devido</strong> é calculado automaticamente: créditos menos débitos.</li>
-                <li>O Total Devido não pode ser digitado manualmente.</li>
-            </ul>
+        <div class="bg-white p-6 rounded-xl max-w-2xl w-full mx-4 shadow-xl cag-tutorial-modal">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <h3 class="text-lg font-bold text-slate-800 mb-1">Como funciona a composição das parcelas</h3>
+                    <p class="text-sm text-slate-500">A mesma configuração de cada coluna é usada na tabela e no preenchimento em lote.</p>
+                </div>
+                <button type="button" id="fecharTutorialAcoesGerais" class="cag-tutorial-close" aria-label="Fechar">×</button>
+            </div>
+            <div class="cag-tutorial-grid mt-4">
+                <section>
+                    <h4>Na tabela</h4>
+                    <ul>
+                        <li>O nome da coluna pode ser editado diretamente no cabeçalho.</li>
+                        <li>Defina a coluna como <strong>Crédito (+)</strong> ou <strong>Débito (−)</strong>.</li>
+                        <li>Azul suave indica Crédito; vermelho suave indica Débito.</li>
+                        <li>Os valores das células podem ser digitados ou colados.</li>
+                    </ul>
+                </section>
+                <section>
+                    <h4>No preenchimento em lote</h4>
+                    <ul>
+                        <li>Escolha a coluna que receberá os valores.</li>
+                        <li>O sinal mostrado corresponde à configuração da coluna.</li>
+                        <li>Informe uma faixa de competências e o valor mensal.</li>
+                        <li>Use várias faixas para valores diferentes ao longo do tempo.</li>
+                    </ul>
+                </section>
+                <section>
+                    <h4>Resultado</h4>
+                    <ul>
+                        <li><strong>Total Devido = Créditos − Débitos.</strong></li>
+                        <li>O Total Devido é automático e não pode ser editado.</li>
+                        <li>O limite é de 6 colunas de composição.</li>
+                    </ul>
+                </section>
+                <section>
+                    <h4>Seleção de competências</h4>
+                    <ul>
+                        <li>Clique no seletor à esquerda da linha para selecionar.</li>
+                        <li>Arraste para selecionar várias linhas em sequência.</li>
+                        <li><strong>Shift + clique</strong> seleciona um intervalo.</li>
+                        <li><strong>Ctrl/Cmd + clique</strong> adiciona ou remove linhas.</li>
+                    </ul>
+                </section>
+            </div>
             <div class="mt-5 flex justify-end">
-                <button type="button" id="fecharTutorialAcoesGerais" class="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-semibold">Entendi</button>
+                <button type="button" id="fecharTutorialAcoesGerais2" class="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-semibold">Entendi</button>
             </div>
         </div>
     </div>
