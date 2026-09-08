@@ -5002,6 +5002,15 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
+    var btnSincronizar = document.getElementById('btnSincronizarDiferencasGuia4');
+    if (btnSincronizar) {
+        btnSincronizar.addEventListener('click', function() {
+            if (typeof importarDiferencasGuia4ParaAtualizacao === 'function') {
+                importarDiferencasGuia4ParaAtualizacao();
+            }
+        });
+    }
+
     var btnCalcular = document.getElementById('btnCalcularAtualizacao');
     if (btnCalcular) {
         btnCalcular.addEventListener('click', function() {
@@ -5039,6 +5048,9 @@ document.addEventListener('DOMContentLoaded', function() {
         btn.addEventListener('click', function() {
             if (this.dataset.guia === 'atualizacao') {
                 sincronizarParametrosAtualizacao();
+                if ((document.getElementById('tipoAcao')?.value || '') === 'condenatoria' && typeof importarDiferencasGuia4ParaAtualizacao === 'function') {
+                    importarDiferencasGuia4ParaAtualizacao();
+                }
             }
         });
     });

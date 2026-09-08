@@ -382,6 +382,16 @@ function atualizarDisponibilidadeRelatoriosPorTipoAcao() {
     });
 
     const aviso = document.getElementById('avisoRelatoriosTipoAcao');
+    const opcaoDiferencas = document.getElementById('relatorioSelecionarDiferencas');
+    const textoDiferencas = opcaoDiferencas?.closest('.relatorio-opcao')?.querySelector('strong');
+    const descricaoDiferencas = opcaoDiferencas?.closest('.relatorio-opcao')?.querySelector('small');
+    if (tipo === 'condenatoria') {
+        if (textoDiferencas) textoDiferencas.textContent = '4. Composição das Parcelas';
+        if (descricaoDiferencas) descricaoDiferencas.textContent = 'Parcelas, créditos, débitos e Total Devido por competência';
+    } else {
+        if (textoDiferencas) textoDiferencas.textContent = '4. Diferenças';
+        if (descricaoDiferencas) descricaoDiferencas.textContent = 'Resultado consolidado das diferenças devidas e recebidas';
+    }
     if (aviso) {
         if (!previdenciaria) {
             aviso.classList.remove('hidden');
@@ -687,7 +697,45 @@ function gerarTabelaDiferencasRelatorioProfissional() {
     </div>`;
 }
 
+function gerarSecaoComposicaoAcoesGeraisRelatorioProfissional(continuaEmNovaPagina = false) {
+    const api = window.contadjusAcoesGerais;
+    const dados = api?.obterDados?.();
+    const colunas = api?.obterColunasComDados?.() || [];
+    const linhas = Array.isArray(dados?.linhas) ? dados.linhas.filter(l => String(l.competencia || '').trim()) : [];
+    const fmt = (v) => relatorioValorMoeda(v);
+    const parse = (v) => {
+        if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+        const t = String(v ?? '').trim();
+        if (!t) return 0;
+        const n = Number(t.replace(/R\$\s*/g, '').replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, ''));
+        return Number.isFinite(n) ? n : 0;
+    };
+    const total = linhas.reduce((s, l) => s + colunas.reduce((x, c) => x + (c.tipo === 'debito' ? -parse(l.valores?.[c.id]) : parse(l.valores?.[c.id])), 0), 0);
+    const cabecalhos = ['Competência', ...colunas.map(c => `${c.nome || 'Valor'} ${c.tipo === 'debito' ? '(−)' : '(+)'}`), 'Total Devido'];
+    const corpo = linhas.map(l => {
+        const totalLinha = colunas.reduce((x, c) => x + (c.tipo === 'debito' ? -parse(l.valores?.[c.id]) : parse(l.valores?.[c.id])), 0);
+        return `<tr><td>${relatorioEscaparHtml(l.competencia)}</td>${colunas.map(c => `<td class=\"num\">${relatorioEscaparHtml(fmt(parse(l.valores?.[c.id])))}</td>`).join('')}<td class=\"num\"><strong>${relatorioEscaparHtml(fmt(totalLinha))}</strong></td></tr>`;
+    }).join('');
+    if (!linhas.length) {
+        return `<section class=\"secao-relatorio secao-composicao-acoes-gerais-relatorio ${continuaEmNovaPagina ? 'continua-em-pagina' : ''}\"><h2>Resultado das Diferenças</h2><p class=\"nota-relatorio\">Não há competências preenchidas na composição das parcelas.</p></section>`;
+    }
+    return `<section class=\"secao-relatorio secao-composicao-acoes-gerais-relatorio ${continuaEmNovaPagina ? 'continua-em-pagina' : ''}\">
+        <h2>Resultado das Diferenças</h2>
+        <div class=\"quadro-resumo quadro-resumo-diferencas\">
+            <div class=\"item\"><span class=\"rotulo\">Termo inicial</span><span class=\"valor\">${relatorioEscaparHtml(relatorioCampo('termoInicialDiferencas', '-'))}</span></div>
+            <div class=\"item\"><span class=\"rotulo\">Competências</span><span class=\"valor\">${linhas.length}</span></div>
+            <div class=\"item\"><span class=\"rotulo\">Colunas com dados</span><span class=\"valor\">${colunas.length}</span></div>
+        </div>
+        <div class=\"quadro-totais-diferencas\"><div class=\"total principal\"><span>Total devido</span><strong>${relatorioEscaparHtml(fmt(total))}</strong></div></div>
+        <div class=\"tabela-relatorio-complementar-wrap tabela-composicao-acoes-gerais-relatorio-wrap\"><table class=\"tabela-composicao-acoes-gerais-relatorio\"><thead><tr>${cabecalhos.map(h => `<th>${relatorioEscaparHtml(h)}</th>`).join('')}</tr></thead><tbody>${corpo}</tbody></table></div>
+        <p class=\"nota-relatorio\">Composição das parcelas reproduzida a partir dos valores informados pelo usuário. Créditos somam e débitos subtraem. O Total Devido é calculado automaticamente por competência.</p>
+    </section>`;
+}
+
 function gerarSecaoDiferencasRelatorioProfissional(continuaEmNovaPagina = false) {
+    if ((document.getElementById('tipoAcao')?.value || '') === 'condenatoria' && window.contadjusAcoesGerais) {
+        return gerarSecaoComposicaoAcoesGeraisRelatorioProfissional(continuaEmNovaPagina);
+    }
     const tabela = document.getElementById('tabelaDiferencas');
     const tbody = document.getElementById('corpoDiferencas');
     const temLinhas = !!tbody && Array.from(tbody.querySelectorAll('tr')).some(tr => tr.querySelectorAll('td').length > 1);

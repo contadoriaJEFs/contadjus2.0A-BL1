@@ -685,12 +685,14 @@
             }
         });
         container.addEventListener('mousedown', e => {
-            const handle = e.target.closest('.cag-select-col');
-            if (!handle || !handle.closest('tbody')) return;
-            const tr = handle.closest('tr[data-row-index]');
-            if (!tr) return;
+            const tr = e.target.closest('tr[data-row-index]');
+            if (!tr || e.button !== 0) return;
+            // Campos editáveis, selects e botões continuam com sua função normal.
+            if (e.target.closest('input, select, button')) return;
+            const handle = e.target.closest('.cag-select-col, .cag-comp-col');
+            if (!handle) return;
             const idx = Number(tr.dataset.rowIndex);
-            if (e.button !== 0) return;
+            if (!Number.isInteger(idx)) return;
             selecaoArrastando = true;
             selecionarLinhaPorClique(idx, e);
             e.preventDefault();
@@ -711,6 +713,11 @@
         container.addEventListener('click', e => {
             const info = e.target.closest('.cag-info-icon');
             if (info) { mostrarTutorial(); return; }
+            const trSelecao = e.target.closest('tr[data-row-index]');
+            if (trSelecao && !e.target.closest('input, select, button') && e.target.closest('.cag-select-col, .cag-comp-col')) {
+                selecionarLinhaPorClique(Number(trSelecao.dataset.rowIndex), e);
+                return;
+            }
             const btnCol = e.target.closest('.cag-remove-col');
             if (btnCol) removerColuna(btnCol.dataset.colId);
             const btnFaixa = e.target.closest('.cag-lote-remover');
@@ -724,13 +731,16 @@
                 if (e.target.checked) linhasSelecionadas.add(idx);
                 else linhasSelecionadas.delete(idx);
                 selecaoAnchor = idx;
+                // Não renderizar a tabela aqui: renderizar() recria os checkboxes
+                // e pode destruir a seleção que acabou de ser feita.
                 atualizarSelecaoVisual();
+                return;
             }
             if (e.target.classList.contains('cag-select-all')) {
                 linhasSelecionadas.clear();
                 if (e.target.checked) estado.linhas.forEach((_, idx) => linhasSelecionadas.add(idx));
                 selecaoAnchor = e.target.checked && estado.linhas.length ? 0 : null;
-                renderizar();
+                atualizarSelecaoVisual();
             }
         });
 
