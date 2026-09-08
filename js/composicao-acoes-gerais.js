@@ -7,9 +7,9 @@
     const MAX_COLUNAS = 6;
     let estado = {
         colunas: [{ id: 'valor-1', nome: 'Valor', tipo: 'credito' }],
-        linhas: [{ competencia: '', valores: { 'valor-1': '' } }]
+        linhas: [{ competencia: '', valores: { 'valor-1': '' }, fontes: { 'valor-1': null } }]
     };
-    let faixasLote = [{ de: '', ate: '', colunaId: 'valor-1', valor: '' }];
+    let faixasLote = [{ id: novoId('faixa'), de: '', ate: '', colunaId: 'valor-1', valor: '' }];
 
     function novoId(prefixo) {
         return prefixo + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -104,7 +104,8 @@
     function adicionarLinha() {
         const valores = {};
         estado.colunas.forEach(col => valores[col.id] = '');
-        estado.linhas.push({ competencia: '', valores });
+        const fontes = {}; estado.colunas.forEach(col => fontes[col.id] = null);
+        estado.linhas.push({ competencia: '', valores, fontes });
         renderizar();
         const inputs = document.querySelectorAll('#tabelaComposicaoAcoesGerais .cag-competencia');
         inputs[inputs.length - 1]?.focus();
@@ -112,7 +113,7 @@
 
     function removerLinha() {
         if (estado.linhas.length <= 1) {
-            estado.linhas[0] = { competencia: '', valores: Object.fromEntries(estado.colunas.map(c => [c.id, ''])) };
+            estado.linhas[0] = { competencia: '', valores: Object.fromEntries(estado.colunas.map(c => [c.id, ''])), fontes: Object.fromEntries(estado.colunas.map(c => [c.id, null])) };
         } else {
             estado.linhas.pop();
         }
@@ -126,7 +127,7 @@
         }
         const id = novoId('valor');
         estado.colunas.push({ id, nome: `Valor ${estado.colunas.length + 1}`, tipo: 'credito' });
-        estado.linhas.forEach(linha => linha.valores[id] = '');
+        estado.linhas.forEach(linha => { linha.valores[id] = ''; if (!linha.fontes) linha.fontes = {}; linha.fontes[id] = null; });
         renderizar();
         renderizarFaixasLote();
     }
@@ -137,7 +138,7 @@
             return;
         }
         estado.colunas = estado.colunas.filter(col => col.id !== id);
-        estado.linhas.forEach(linha => { if (linha.valores) delete linha.valores[id]; });
+        estado.linhas.forEach(linha => { if (linha.valores) delete linha.valores[id]; if (linha.fontes) delete linha.fontes[id]; });
         faixasLote.forEach(faixa => { if (faixa.colunaId === id) faixa.colunaId = estado.colunas[0]?.id || ''; });
         renderizar();
         renderizarFaixasLote();
@@ -157,10 +158,11 @@
         const ids = new Set(colunas.map(c => c.id));
         const linhas = dados.linhas.map(l => ({
             competencia: l.competencia || '',
-            valores: Object.fromEntries(colunas.map(c => [c.id, ids.has(c.id) ? (l.valores?.[c.id] ?? '') : '']))
+            valores: Object.fromEntries(colunas.map(c => [c.id, ids.has(c.id) ? (l.valores?.[c.id] ?? '') : ''])),
+            fontes: Object.fromEntries(colunas.map(c => [c.id, l.fontes?.[c.id] ?? null]))
         }));
         estado = { colunas, linhas: linhas.length ? linhas : [{ competencia: '', valores: Object.fromEntries(colunas.map(c => [c.id, ''])) }] };
-        faixasLote = [{ de: '', ate: '', colunaId: colunas[0].id, valor: '' }];
+        faixasLote = [{ id: novoId('faixa'), de: '', ate: '', colunaId: colunas[0].id, valor: '' }];
         renderizar();
         renderizarFaixasLote();
     }
@@ -221,6 +223,13 @@
                         ${estado.colunas.map(col => `<option value="${escapeHtml(col.id)}" ${faixa.colunaId === col.id ? 'selected' : ''}>${escapeHtml(col.nome)} ${col.tipo === 'debito' ? '−' : '+'}</option>`).join('')}
                     </select>
                 </div>
+                <div class="cag-lote-field cag-lote-sinal">
+                    <label>Sinal da coluna</label>
+                    <select class="cag-lote-input cag-lote-tipo" data-lote-index="${idx}">
+                        <option value="credito" ${estado.colunas.find(c => c.id === faixa.colunaId)?.tipo !== 'debito' ? 'selected' : ''}>Crédito (+)</option>
+                        <option value="debito" ${estado.colunas.find(c => c.id === faixa.colunaId)?.tipo === 'debito' ? 'selected' : ''}>Débito (−)</option>
+                    </select>
+                </div>
                 <div class="cag-lote-field cag-lote-valor">
                     <label>Valor mensal</label>
                     <input type="text" class="cag-lote-input cag-lote-valor-input" inputmode="decimal" placeholder="0,00" value="${escapeHtml(faixa.valor)}" data-lote-index="${idx}">
@@ -231,7 +240,7 @@
     }
 
     function adicionarFaixaLote() {
-        faixasLote.push({ de: '', ate: '', colunaId: estado.colunas[0]?.id || '', valor: '' });
+        faixasLote.push({ id: novoId('faixa'), de: '', ate: '', colunaId: estado.colunas[0]?.id || '', valor: '' });
         renderizarFaixasLote();
         const inputs = document.querySelectorAll('.cag-lote-de');
         inputs[inputs.length - 1]?.focus();
@@ -239,6 +248,21 @@
 
     function removerFaixaLote(idx) {
         if (faixasLote.length <= 1) return;
+        const faixa = faixasLote[idx];
+        if (!faixa) return;
+        const teveAplicacao = estado.linhas.some(l => Object.values(l.fontes || {}).some(origem => origem === faixa.id));
+        if (teveAplicacao) {
+            const confirmar = confirm('Esta faixa já foi aplicada. Excluir a faixa e também remover os valores que foram preenchidos por ela?\n\nValores que você alterou manualmente serão preservados.');
+            if (!confirmar) return;
+            estado.linhas.forEach(linha => {
+                if (!linha.fontes) linha.fontes = {};
+                if (linha.fontes[faixa.colunaId] === faixa.id) {
+                    linha.valores[faixa.colunaId] = '';
+                    linha.fontes[faixa.colunaId] = null;
+                }
+            });
+            renderizar();
+        }
         faixasLote.splice(idx, 1);
         renderizarFaixasLote();
     }
@@ -267,7 +291,7 @@
                 alert(`Preenchimento em lote — faixa ${i + 1}: informe o valor mensal.`);
                 return;
             }
-            regrasValidas.push({ de, ate, competencias, colunaId: faixa.colunaId, valor: String(faixa.valor).trim() });
+            regrasValidas.push({ id: faixa.id, de, ate, competencias, colunaId: faixa.colunaId, valor: String(faixa.valor).trim() });
         }
         if (!regrasValidas.length) {
             alert('Informe pelo menos uma faixa para o preenchimento em lote.');
@@ -285,12 +309,14 @@
                 if (!mapa.has(comp)) {
                     const valores = {};
                     estado.colunas.forEach(col => valores[col.id] = '');
-                    const linha = { competencia: comp, valores };
+                    const linha = { competencia: comp, valores, fontes: Object.fromEntries(estado.colunas.map(col => [col.id, null])) };
                     estado.linhas.push(linha);
                     mapa.set(comp, linha);
                 }
                 mapa.get(comp).competencia = comp;
                 mapa.get(comp).valores[regra.colunaId] = regra.valor;
+                if (!mapa.get(comp).fontes) mapa.get(comp).fontes = {};
+                mapa.get(comp).fontes[regra.colunaId] = regra.id;
             });
         });
 
@@ -308,6 +334,137 @@
         renderizarFaixasLote();
     }
 
+    // ================================================================
+    // Importação por colagem de planilha — prévia + mapeamento + confirmação
+    // ================================================================
+    let importacaoPlanilha = null;
+
+    function normalizarCabecalho(v) {
+        return String(v ?? '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    }
+
+    function analisarColagem(texto) {
+        const linhasBrutas = String(texto ?? '').replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
+        if (!linhasBrutas.length) return null;
+        const matriz = linhasBrutas.map(l => l.split('\t'));
+        const qtd = Math.max(...matriz.map(l => l.length));
+        matriz.forEach(l => { while (l.length < qtd) l.push(''); });
+        const primeira = matriz[0];
+        const pareceCabecalho = primeira.some(v => {
+            const n = String(v).trim();
+            return n !== '' && !normalizarCompetencia(n) && !/^[-+]?\s*R?\$?\s*[\d.,]+$/.test(n);
+        });
+        const cabecalhos = pareceCabecalho ? primeira : primeira.map((_, i) => `Coluna ${i + 1}`);
+        const dados = pareceCabecalho ? matriz.slice(1) : matriz;
+        if (!dados.length) return null;
+        return { qtdColunas: qtd, cabecalhos, dados, temCabecalho: pareceCabecalho };
+    }
+
+    function sugerirMapeamentos(info) {
+        return info.cabecalhos.map((nome, i) => {
+            const h = normalizarCabecalho(nome);
+            const valores = info.dados.map(l => l[i] ?? '');
+            const qtdCompetencias = valores.filter(v => !!normalizarCompetencia(v)).length;
+            if (h.includes('compet') || qtdCompetencias >= Math.max(1, Math.ceil(valores.length * 0.7))) return 'competencia';
+            const existente = estado.colunas.find(c => normalizarCabecalho(c.nome) === h);
+            return existente ? `coluna:${existente.id}` : 'novo';
+        });
+    }
+
+    function abrirImportacaoPlanilha() {
+        const modal = document.getElementById('modalImportarPlanilhaAcoesGerais');
+        if (!modal) return;
+        modal.classList.remove('hidden');
+        const ta = document.getElementById('cagPlanilhaTexto');
+        if (ta) { ta.value = ''; ta.focus(); }
+        limparPreviaImportacao();
+    }
+
+    function fecharImportacaoPlanilha() {
+        document.getElementById('modalImportarPlanilhaAcoesGerais')?.classList.add('hidden');
+        importacaoPlanilha = null;
+    }
+
+    function limparPreviaImportacao() {
+        const area = document.getElementById('cagPlanilhaPrevia');
+        const acao = document.getElementById('btnCagAplicarImportacao');
+        if (area) area.innerHTML = '<p class="cag-import-empty">Cole os dados acima para visualizar a estrutura encontrada.</p>';
+        if (acao) acao.disabled = true;
+    }
+
+    function renderizarPreviaImportacao() {
+        const ta = document.getElementById('cagPlanilhaTexto');
+        const area = document.getElementById('cagPlanilhaPrevia');
+        const acao = document.getElementById('btnCagAplicarImportacao');
+        if (!ta || !area || !acao) return;
+        const info = analisarColagem(ta.value);
+        if (!info) { importacaoPlanilha = null; limparPreviaImportacao(); return; }
+        const mapeamentos = sugerirMapeamentos(info);
+        importacaoPlanilha = { info, mapeamentos };
+        area.innerHTML = `
+            <div class="cag-import-summary"><strong>${info.dados.length} linha(s)</strong> • <strong>${info.qtdColunas} coluna(s)</strong> reconhecida(s)${info.temCabecalho ? ' • cabeçalho identificado' : ' • sem cabeçalho'}</div>
+            <div class="cag-import-map">${info.cabecalhos.map((nome, i) => `
+                <div class="cag-import-map-row">
+                    <div class="cag-import-col-source"><strong>Coluna ${i + 1}</strong><span>${escapeHtml(nome)}</span></div>
+                    <select class="cag-import-destino" data-import-col="${i}">
+                        <option value="ignorar">Não importar</option>
+                        <option value="competencia" ${mapeamentos[i] === 'competencia' ? 'selected' : ''}>Competência</option>
+                        ${estado.colunas.map(c => `<option value="coluna:${escapeHtml(c.id)}" ${mapeamentos[i] === `coluna:${c.id}` ? 'selected' : ''}>${escapeHtml(c.nome)} ${c.tipo === 'debito' ? '−' : '+'}</option>`).join('')}
+                        <option value="novo" ${mapeamentos[i] === 'novo' ? 'selected' : ''}>Criar nova coluna</option>
+                    </select>
+                </div>`).join('')}</div>
+            <div class="cag-import-table-wrap"><table class="cag-import-table"><thead><tr>${info.cabecalhos.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${info.dados.slice(0, 8).map(l => `<tr>${l.map(v => `<td>${escapeHtml(v)}</td>`).join('')}</tr>`).join('')}</tbody></table>${info.dados.length > 8 ? '<small>Prévia limitada às primeiras 8 linhas.</small>' : ''}</div>`;
+        acao.disabled = false;
+    }
+
+    function aplicarImportacaoPlanilha() {
+        if (!importacaoPlanilha) return;
+        const selects = [...document.querySelectorAll('#cagPlanilhaPrevia .cag-import-destino')];
+        const destinos = selects.map(s => s.value);
+        const competenciaCount = destinos.filter(v => v === 'competencia').length;
+        if (competenciaCount !== 1) { alert('Selecione exatamente uma coluna como Competência.'); return; }
+        const novos = destinos.filter(v => v === 'novo').length;
+        if (estado.colunas.length + novos > MAX_COLUNAS) { alert(`A importação criaria ${novos} nova(s) coluna(s), mas o limite é de 6 colunas de composição.`); return; }
+
+        const nomesNovos = {};
+        let novaColunaIndex = 0;
+        destinos.forEach((d, i) => {
+            if (d === 'novo') {
+                const base = importacaoPlanilha.info.cabecalhos[i] || `Valor ${estado.colunas.length + novaColunaIndex + 1}`;
+                const id = novoId('valor');
+                estado.colunas.push({ id, nome: base.trim() || `Valor ${estado.colunas.length + 1}`, tipo: 'credito' });
+                nomesNovos[i] = id;
+                novaColunaIndex++;
+            }
+        });
+        estado.linhas = estado.linhas.filter(l => l.competencia || estado.colunas.some(c => String(l.valores?.[c.id] ?? '').trim() !== ''));
+        if (!estado.linhas.length) estado.linhas.push({ competencia: '', valores: {}, fontes: {} });
+        estado.linhas.forEach(l => { if (!l.valores) l.valores = {}; if (!l.fontes) l.fontes = {}; estado.colunas.forEach(c => { if (!(c.id in l.valores)) l.valores[c.id] = ''; if (!(c.id in l.fontes)) l.fontes[c.id] = null; }); });
+
+        const idxComp = destinos.indexOf('competencia');
+        const mapa = new Map(estado.linhas.map(l => [normalizarCompetencia(l.competencia), l]).filter(([k]) => k));
+        importacaoPlanilha.info.dados.forEach(reg => {
+            const comp = normalizarCompetencia(reg[idxComp]);
+            if (!comp) return;
+            let linha = mapa.get(comp);
+            if (!linha) {
+                linha = { competencia: comp, valores: {}, fontes: {} };
+                estado.colunas.forEach(c => { linha.valores[c.id] = ''; linha.fontes[c.id] = null; });
+                estado.linhas.push(linha); mapa.set(comp, linha);
+            }
+            destinos.forEach((d, i) => {
+                const colId = d.startsWith('coluna:') ? d.slice(7) : (d === 'novo' ? nomesNovos[i] : null);
+                if (!colId || d === 'competencia' || d === 'ignorar') return;
+                linha.valores[colId] = String(reg[i] ?? '').trim();
+                linha.fontes[colId] = 'planilha';
+            });
+        });
+        estado.linhas.sort((a, b) => (competenciaParaNumero(a.competencia) ?? Infinity) - (competenciaParaNumero(b.competencia) ?? Infinity));
+        renderizar();
+        renderizarFaixasLote();
+        fecharImportacaoPlanilha();
+    }
+
     function mostrarTutorial() {
         const modal = document.getElementById('modalTutorialAcoesGerais');
         if (modal) modal.classList.remove('hidden');
@@ -321,7 +478,11 @@
         container.addEventListener('input', e => {
             const row = e.target.dataset.row;
             if (e.target.classList.contains('cag-competencia')) estado.linhas[row].competencia = e.target.value;
-            if (e.target.classList.contains('cag-valor')) estado.linhas[row].valores[e.target.dataset.colId] = e.target.value;
+            if (e.target.classList.contains('cag-valor')) {
+                estado.linhas[row].valores[e.target.dataset.colId] = e.target.value;
+                if (!estado.linhas[row].fontes) estado.linhas[row].fontes = {};
+                estado.linhas[row].fontes[e.target.dataset.colId] = 'manual';
+            }
             if (row !== undefined) atualizarLinha(Number(row));
             atualizarResumo();
         });
@@ -354,7 +515,19 @@
         lote?.addEventListener('change', e => {
             const idx = Number(e.target.dataset.loteIndex);
             if (!Number.isInteger(idx) || !faixasLote[idx]) return;
-            if (e.target.classList.contains('cag-lote-coluna-select')) faixasLote[idx].colunaId = e.target.value;
+            if (e.target.classList.contains('cag-lote-coluna-select')) {
+                faixasLote[idx].colunaId = e.target.value;
+                renderizarFaixasLote();
+            }
+            if (e.target.classList.contains('cag-lote-tipo')) {
+                const colId = faixasLote[idx].colunaId;
+                const col = estado.colunas.find(c => c.id === colId);
+                if (col) {
+                    col.tipo = e.target.value === 'debito' ? 'debito' : 'credito';
+                    renderizar();
+                    renderizarFaixasLote();
+                }
+            }
         });
 
         document.getElementById('btnCagAdicionarLinha')?.addEventListener('click', adicionarLinha);
@@ -362,6 +535,16 @@
         document.getElementById('btnCagAdicionarColuna')?.addEventListener('click', adicionarColuna);
         document.getElementById('btnCagAdicionarFaixa')?.addEventListener('click', adicionarFaixaLote);
         document.getElementById('btnCagAplicarLote')?.addEventListener('click', aplicarPreenchimentoLote);
+        document.getElementById('btnCagImportarPlanilha')?.addEventListener('click', abrirImportacaoPlanilha);
+        document.getElementById('fecharImportacaoPlanilhaAcoesGerais')?.addEventListener('click', fecharImportacaoPlanilha);
+        document.getElementById('cancelarImportacaoPlanilhaAcoesGerais')?.addEventListener('click', fecharImportacaoPlanilha);
+        document.getElementById('btnCagAnalisarPlanilha')?.addEventListener('click', renderizarPreviaImportacao);
+        document.getElementById('btnCagAplicarImportacao')?.addEventListener('click', aplicarImportacaoPlanilha);
+        document.getElementById('cagPlanilhaTexto')?.addEventListener('paste', () => setTimeout(renderizarPreviaImportacao, 30));
+        document.getElementById('cagPlanilhaTexto')?.addEventListener('input', renderizarPreviaImportacao);
+        document.getElementById('cagPlanilhaPrevia')?.addEventListener('change', e => {
+            if (e.target.classList.contains('cag-import-destino') && importacaoPlanilha) importacaoPlanilha.mapeamentos[Number(e.target.dataset.importCol)] = e.target.value;
+        });
         document.getElementById('btnCagTutorial')?.addEventListener('click', mostrarTutorial);
         document.getElementById('fecharTutorialAcoesGerais')?.addEventListener('click', () => document.getElementById('modalTutorialAcoesGerais')?.classList.add('hidden'));
         document.getElementById('fecharTutorialAcoesGerais2')?.addEventListener('click', () => document.getElementById('modalTutorialAcoesGerais')?.classList.add('hidden'));

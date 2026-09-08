@@ -3477,6 +3477,16 @@
     font-size: 11px;
     color: #64748b;
 }
+
+#composicaoAcoesGerais .cag-lote-head-actions {
+    display:flex;
+    align-items:center;
+    gap:7px;
+    flex-wrap:wrap;
+}
+#composicaoAcoesGerais .cag-lote-sinal { min-width:125px; }
+#composicaoAcoesGerais .cag-lote-sinal .cag-lote-input { font-weight:600; }
+
 #composicaoAcoesGerais .cag-faixas-lote {
     display: flex;
     flex-direction: column;
@@ -3484,7 +3494,7 @@
 }
 #composicaoAcoesGerais .cag-lote-row {
     display: grid;
-    grid-template-columns: minmax(105px, 1fr) auto minmax(105px, 1fr) minmax(150px, 1.3fr) minmax(120px, 1fr) 28px;
+    grid-template-columns: minmax(95px, 1fr) auto minmax(95px, 1fr) minmax(135px, 1.15fr) minmax(125px, 1fr) minmax(120px, 1fr) 28px;
     align-items: end;
     gap: 7px;
     padding: 7px;
@@ -3563,4 +3573,211 @@
     }
     #composicaoAcoesGerais .cag-lote-separador { display: none; }
     #composicaoAcoesGerais .cag-lote-actions { align-items: flex-end; flex-direction: column; }
+}
+
+/* =====================================================================
+   CONTADJUS 2.0A — IMPORTAÇÃO DE DADOS POR COLAGEM DE PLANILHA
+   Escopo exclusivo: Ações Condenatórias em Geral
+   ===================================================================== */
+#composicaoAcoesGerais .cag-lote-actions {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    flex-wrap:wrap;
+}
+#composicaoAcoesGerais .cag-lote-actions-left {
+    display:flex;
+    align-items:center;
+    gap:10px;
+    flex-wrap:wrap;
+}
+#composicaoAcoesGerais .cag-btn-planilha {
+    background:#fff;
+    border-color:#93c5fd;
+    color:#1d4ed8;
+}
+#composicaoAcoesGerais .cag-btn-planilha:hover { background:#eff6ff; }
+
+.cag-import-modal {
+    max-width:980px;
+    max-height:90vh;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+}
+.cag-import-modal-head {
+    display:flex;
+    justify-content:space-between;
+    gap:18px;
+    padding:18px 20px;
+    border-bottom:1px solid #e2e8f0;
+}
+.cag-import-modal-head h3 {
+    margin:0;
+    color:#1e293b;
+    font-size:17px;
+    font-weight:700;
+}
+.cag-import-modal-head p {
+    margin:5px 0 0;
+    color:#64748b;
+    font-size:12px;
+    line-height:1.5;
+}
+.cag-import-close {
+    flex:0 0 auto;
+    width:30px;
+    height:30px;
+    border:1px solid #cbd5e1;
+    border-radius:6px;
+    background:#fff;
+    color:#64748b;
+    font-size:20px;
+    line-height:26px;
+    cursor:pointer;
+}
+.cag-import-body {
+    padding:16px 20px;
+    overflow:auto;
+}
+.cag-import-label {
+    display:block;
+    margin-bottom:5px;
+    color:#334155;
+    font-size:12px;
+    font-weight:700;
+}
+.cag-import-textarea {
+    width:100%;
+    min-height:125px;
+    box-sizing:border-box;
+    resize:vertical;
+    border:1px solid #cbd5e1;
+    border-radius:7px;
+    padding:10px;
+    font-family:Arial, sans-serif;
+    font-size:12px;
+    line-height:1.5;
+    color:#0f172a;
+    background:#fff;
+}
+.cag-import-textarea:focus {
+    outline:none;
+    border-color:#60a5fa;
+    box-shadow:0 0 0 1px #60a5fa;
+}
+.cag-import-actions {
+    display:flex;
+    justify-content:flex-end;
+    margin-top:8px;
+}
+.cag-import-preview {
+    margin-top:14px;
+    border:1px solid #dbe3ee;
+    border-radius:8px;
+    background:#f8fafc;
+    padding:10px;
+}
+.cag-import-empty {
+    margin:8px;
+    color:#94a3b8;
+    font-size:12px;
+    text-align:center;
+}
+.cag-import-summary {
+    margin-bottom:9px;
+    color:#475569;
+    font-size:12px;
+}
+.cag-import-map {
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    margin-bottom:12px;
+}
+.cag-import-map-row {
+    display:grid;
+    grid-template-columns:minmax(180px,1fr) minmax(220px,1fr);
+    align-items:center;
+    gap:10px;
+    padding:7px 8px;
+    background:#fff;
+    border:1px solid #e2e8f0;
+    border-radius:6px;
+}
+.cag-import-col-source {
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    gap:2px;
+}
+.cag-import-col-source strong {
+    color:#64748b;
+    font-size:10px;
+    text-transform:uppercase;
+}
+.cag-import-col-source span {
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    color:#1e293b;
+    font-size:12px;
+}
+.cag-import-destino {
+    width:100%;
+    min-height:32px;
+    border:1px solid #cbd5e1;
+    border-radius:5px;
+    background:#fff;
+    color:#334155;
+    padding:5px 7px;
+    font-size:12px;
+}
+.cag-import-table-wrap {
+    overflow:auto;
+    border:1px solid #cbd5e1;
+    border-radius:6px;
+    background:#fff;
+}
+.cag-import-table {
+    width:100%;
+    border-collapse:collapse;
+    font-size:11px;
+}
+.cag-import-table th {
+    background:#002b66;
+    color:#fff;
+    padding:6px 7px;
+    border:1px solid #002b66;
+    text-align:left;
+    white-space:nowrap;
+}
+.cag-import-table td {
+    padding:5px 7px;
+    border:1px solid #cbd5e1;
+    color:#334155;
+    white-space:nowrap;
+}
+.cag-import-table tbody tr:nth-child(even) td { background:#f1f5f9; }
+.cag-import-table-wrap small {
+    display:block;
+    padding:6px 8px;
+    color:#64748b;
+}
+.cag-import-modal-foot {
+    display:flex;
+    justify-content:flex-end;
+    gap:8px;
+    padding:12px 20px;
+    border-top:1px solid #e2e8f0;
+    background:#f8fafc;
+}
+.cag-import-modal-foot .cag-btn:disabled {
+    opacity:.45;
+    cursor:not-allowed;
+}
+@media (max-width:700px) {
+    .cag-import-map-row { grid-template-columns:1fr; }
+    .cag-import-modal { max-height:94vh; }
 }

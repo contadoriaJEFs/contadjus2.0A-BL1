@@ -135,8 +135,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Gatilhos para recalcular termo automático
-    ['dib', 'dataAjuizamento', 'aplicarPrescricao', 'prazoPrescricional'].forEach(id => {
+    // Gatilhos para recalcular o termo automático.
+    // Previdenciário usa a DIB como marco; Ações Condenatórias em Geral
+    // usam a data do ajuizamento como marco da prescrição.
+    ['dib', 'dataAjuizamento', 'aplicarPrescricao', 'prazoPrescricional', 'tipoAcao'].forEach(id => {
         const el = document.getElementById(id);
         if (el) {
             el.addEventListener('change', function() {
@@ -145,9 +147,14 @@ document.addEventListener('DOMContentLoaded', function() {
             if (el.tagName === 'INPUT') {
                 el.addEventListener('input', function() {
                     if (!termoInicialManual) {
-                        const dibVal = document.getElementById('dib').value;
-                        const ajuizVal = document.getElementById('dataAjuizamento').value;
-                        if (dibVal.length >= 6 && (document.getElementById('aplicarPrescricao').value === 'nao' || ajuizVal.length >= 8)) {
+                        const tipo = document.getElementById('tipoAcao')?.value || 'previdenciaria';
+                        const dibVal = document.getElementById('dib')?.value || '';
+                        const ajuizVal = document.getElementById('dataAjuizamento')?.value || '';
+                        if (tipo === 'previdenciaria') {
+                            if (dibVal.length >= 6 && (document.getElementById('aplicarPrescricao').value === 'nao' || ajuizVal.length >= 8)) {
+                                calcularTermoInicial();
+                            }
+                        } else if (ajuizVal.length >= 8) {
                             calcularTermoInicial();
                         }
                     }
@@ -574,6 +581,20 @@ function onTipoAcaoChange() {
     if (typeof atualizarModoGuia4AcoesGerais === 'function') {
         atualizarModoGuia4AcoesGerais();
     }
+    const rodapeContextual = document.getElementById('rodapeContextual');
+    if (rodapeContextual) {
+        if (tipo === 'condenatoria') {
+            rodapeContextual.textContent = 'ContadJus • Cálculos Judiciais • Ações Condenatórias em Geral';
+        } else if (tipo === 'tributaria') {
+            rodapeContextual.textContent = 'ContadJus • Cálculos Judiciais • Ações Tributárias';
+        } else {
+            rodapeContextual.textContent = 'Evolução histórica do RGPS desde 07/1994 • Base de índices atualizada até 2026';
+        }
+    }
+    // O termo inicial automático muda de fundamento conforme o tipo de ação.
+    if (!termoInicialManual) {
+        calcularTermoInicial();
+    }
 }
 
 function sincronizarDataFinal() {
@@ -704,8 +725,41 @@ function definirTermoInicial(valor, origem) {
 function calcularTermoInicial() {
     if (termoInicialManual) return;
 
+    const tipo = document.getElementById('tipoAcao')?.value || 'previdenciaria';
     const aplicarPrescricao = document.getElementById('aplicarPrescricao').value === 'sim';
     const prazo = parseInt(document.getElementById('prazoPrescricional').value) || 5;
+
+    // Ações Condenatórias em Geral: o marco da prescrição é o ajuizamento.
+    // O termo automático é o limite prescricional (ajuizamento - prazo).
+    // Se a prescrição não for aplicada, usa-se o mês do ajuizamento como
+    // referência automática; o cadeado continua permitindo ajuste para
+    // situações específicas.
+    if (tipo === 'condenatoria') {
+        const strAjuizamento = document.getElementById('dataAjuizamento')?.value || '';
+        const ajuizamentoObj = parseDataFlexivel(strAjuizamento, true);
+        if (!ajuizamentoObj) return;
+
+        let termoMes = ajuizamentoObj.mes;
+        let termoAno = ajuizamentoObj.ano;
+        if (aplicarPrescricao) {
+            termoAno -= prazo;
+        }
+
+        const valor = `${String(termoMes).padStart(2,'0')}/${termoAno}`;
+        definirTermoInicial(valor, 'automatico');
+
+        const status1 = document.getElementById('statusTermoPrincipal');
+        const status2 = document.getElementById('statusTermoBeneficio');
+        const texto = aplicarPrescricao
+            ? `Termo calculado pela prescrição: ${prazo} anos antes do ajuizamento.`
+            : 'Termo de referência pelo ajuizamento; ajuste manual se necessário.';
+        if (status1) status1.textContent = texto;
+        if (status2) status2.textContent = texto;
+        return;
+    }
+
+    // Caminho previdenciário preservado: DIB continua sendo o marco-base,
+    // com a mesma lógica de prescrição já utilizada pelo sistema.
     const strDib = document.getElementById('dib').value;
     const dibObj = parseDataFlexivel(strDib, true);
     if (!dibObj) return;

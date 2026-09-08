@@ -489,11 +489,16 @@
                                 <strong>Preenchimento em lote</strong>
                                 <span>Informe uma ou várias faixas de competência e o valor mensal. As competências serão criadas e preenchidas automaticamente.</span>
                             </div>
-                            <button type="button" id="btnCagAdicionarFaixa" class="cag-btn">+ Faixa</button>
+                            <div class="cag-lote-head-actions">
+                                <button type="button" id="btnCagAdicionarFaixa" class="cag-btn">+ Faixa</button>
+                            </div>
                         </div>
                         <div id="cagFaixasLote" class="cag-faixas-lote"></div>
                         <div class="cag-lote-actions">
-                            <span>Você pode usar valores diferentes em cada faixa e em colunas diferentes.</span>
+                            <div class="cag-lote-actions-left">
+                                <span>Você pode usar valores diferentes em cada faixa e em colunas diferentes.</span>
+                                <button type="button" id="btnCagImportarPlanilha" class="cag-btn cag-btn-planilha">📋 Colar dados da planilha</button>
+                            </div>
                             <button type="button" id="btnCagAplicarLote" class="cag-btn cag-btn-primary">Preencher automaticamente</button>
                         </div>
                     </div>
@@ -1323,7 +1328,7 @@
             </div>
 
         </main>
-        <footer class="contadjus-rodape no-print">Evolução histórica do RGPS desde 07/1994 • Base de índices atualizada até 2026</footer>
+        <footer id="rodapeContextual" class="contadjus-rodape no-print">Evolução histórica do RGPS desde 07/1994 • Base de índices atualizada até 2026</footer>
     </div>
 
     <!-- ============================================================ -->
@@ -1479,6 +1484,38 @@
                 <button id="btnSalvarJustificativa" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm font-semibold shadow transition">Salvar</button>
                 <button id="btnLimparJustificativa" class="px-4 py-2 bg-orange-500 text-white rounded-md hover:bg-orange-600 text-sm font-semibold shadow transition">Limpar Justificativa</button>
                 <button id="btnCancelarJustificativa" class="px-4 py-2 border border-slate-300 text-slate-700 rounded-md hover:bg-slate-50 text-sm font-semibold transition">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- IMPORTAÇÃO POR COLAGEM DE PLANILHA — AÇÕES GERAIS -->
+    <!-- ============================================================ -->
+    <div id="modalImportarPlanilhaAcoesGerais" class="fixed inset-0 bg-black/50 flex items-center justify-center hidden z-50 modal-overlay">
+        <div class="cag-import-modal bg-white rounded-xl shadow-xl w-full mx-4" role="dialog" aria-modal="true" aria-labelledby="tituloImportarPlanilhaAcoesGerais">
+            <div class="cag-import-modal-head">
+                <div>
+                    <h3 id="tituloImportarPlanilhaAcoesGerais">Colar dados da planilha</h3>
+                    <p>Copie do Excel ou Google Sheets e cole abaixo. O sistema reconhecerá as colunas, mas <strong>nada será preenchido antes da sua validação</strong>.</p>
+                </div>
+                <button type="button" id="fecharImportacaoPlanilhaAcoesGerais" class="cag-import-close" title="Fechar">×</button>
+            </div>
+            <div class="cag-import-body">
+                <label for="cagPlanilhaTexto" class="cag-import-label">Dados copiados</label>
+                <textarea id="cagPlanilhaTexto" class="cag-import-textarea" placeholder="Exemplo:
+Competência	Principal	Desconto
+01/2020	1000	100
+02/2020	1000	100"></textarea>
+                <div class="cag-import-actions">
+                    <button type="button" id="btnCagAnalisarPlanilha" class="cag-btn cag-btn-primary">Analisar dados</button>
+                </div>
+                <div id="cagPlanilhaPrevia" class="cag-import-preview">
+                    <p class="cag-import-empty">Cole os dados acima para visualizar a estrutura encontrada.</p>
+                </div>
+            </div>
+            <div class="cag-import-modal-foot">
+                <button type="button" id="cancelarImportacaoPlanilhaAcoesGerais" class="cag-btn">Cancelar</button>
+                <button type="button" id="btnCagAplicarImportacao" class="cag-btn cag-btn-primary" disabled>Validar e preencher</button>
             </div>
         </div>
     </div>
