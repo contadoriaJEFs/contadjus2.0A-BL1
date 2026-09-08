@@ -9,6 +9,7 @@
         colunas: [{ id: 'valor-1', nome: 'Valor', tipo: 'credito' }],
         linhas: [{ competencia: '', valores: { 'valor-1': '' } }]
     };
+    let faixasLote = [{ de: '', ate: '', colunaId: 'valor-1', valor: '' }];
 
     function novoId(prefixo) {
         return prefixo + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -72,7 +73,7 @@
                 </td>
                 ${estado.colunas.map(col => `
                     <td class="cag-td cag-value-col">
-                        <input class="cag-cell cag-valor" inputmode="decimal" value="${escapeHtml(linha.valores?.[col.id] ?? '')}" placeholder="0,00" data-row="${idx}" data-col-id="${col.id}">
+                        <input class="cag-cell cag-valor ${col.tipo === 'debito' ? 'cag-cell-debito' : 'cag-cell-credito'}" inputmode="decimal" value="${escapeHtml(linha.valores?.[col.id] ?? '')}" placeholder="0,00" data-row="${idx}" data-col-id="${col.id}">
                     </td>`).join('')}
                 <td class="cag-td cag-total-col cag-total-cell">R$ ${formatarMoeda(valorLinha(linha))}</td>
             </tr>`).join('');
@@ -127,6 +128,7 @@
         estado.colunas.push({ id, nome: `Valor ${estado.colunas.length + 1}`, tipo: 'credito' });
         estado.linhas.forEach(linha => linha.valores[id] = '');
         renderizar();
+        renderizarFaixasLote();
     }
 
     function removerColuna(id) {
@@ -136,7 +138,9 @@
         }
         estado.colunas = estado.colunas.filter(col => col.id !== id);
         estado.linhas.forEach(linha => { if (linha.valores) delete linha.valores[id]; });
+        faixasLote.forEach(faixa => { if (faixa.colunaId === id) faixa.colunaId = estado.colunas[0]?.id || ''; });
         renderizar();
+        renderizarFaixasLote();
     }
 
     function obterDados() {
@@ -156,7 +160,9 @@
             valores: Object.fromEntries(colunas.map(c => [c.id, ids.has(c.id) ? (l.valores?.[c.id] ?? '') : '']))
         }));
         estado = { colunas, linhas: linhas.length ? linhas : [{ competencia: '', valores: Object.fromEntries(colunas.map(c => [c.id, ''])) }] };
+        faixasLote = [{ de: '', ate: '', colunaId: colunas[0].id, valor: '' }];
         renderizar();
+        renderizarFaixasLote();
     }
 
     function coletarParaAtualizacao() {
@@ -164,6 +170,142 @@
             competencia: String(linha.competencia || '').trim(),
             diferenca: Number(valorLinha(linha).toFixed(2))
         })).filter(item => item.competencia && item.diferenca !== 0);
+    }
+
+    function normalizarCompetencia(valor) {
+        const m = String(valor ?? '').trim().match(/^(\d{1,2})\s*\/\s*(\d{4})$/);
+        if (!m) return null;
+        const mes = Number(m[1]);
+        const ano = Number(m[2]);
+        if (mes < 1 || mes > 12) return null;
+        return `${String(mes).padStart(2, '0')}/${ano}`;
+    }
+
+    function competenciaParaNumero(comp) {
+        const c = normalizarCompetencia(comp);
+        if (!c) return null;
+        const [mes, ano] = c.split('/').map(Number);
+        return ano * 12 + (mes - 1);
+    }
+
+    function gerarCompetencias(de, ate) {
+        const inicio = competenciaParaNumero(de);
+        const fim = competenciaParaNumero(ate);
+        if (inicio === null || fim === null || inicio > fim) return [];
+        const resultado = [];
+        for (let n = inicio; n <= fim; n++) {
+            const ano = Math.floor(n / 12);
+            const mes = (n % 12) + 1;
+            resultado.push(`${String(mes).padStart(2, '0')}/${ano}`);
+        }
+        return resultado;
+    }
+
+    function renderizarFaixasLote() {
+        const container = document.getElementById('cagFaixasLote');
+        if (!container) return;
+        container.innerHTML = faixasLote.map((faixa, idx) => `
+            <div class="cag-lote-row" data-lote-index="${idx}">
+                <div class="cag-lote-field cag-lote-periodo">
+                    <label>De</label>
+                    <input type="text" class="cag-lote-input cag-lote-de" placeholder="MM/AAAA" maxlength="7" value="${escapeHtml(faixa.de)}" data-lote-index="${idx}">
+                </div>
+                <span class="cag-lote-separador">até</span>
+                <div class="cag-lote-field cag-lote-periodo">
+                    <label>Até</label>
+                    <input type="text" class="cag-lote-input cag-lote-ate" placeholder="MM/AAAA" maxlength="7" value="${escapeHtml(faixa.ate)}" data-lote-index="${idx}">
+                </div>
+                <div class="cag-lote-field cag-lote-coluna">
+                    <label>Coluna</label>
+                    <select class="cag-lote-input cag-lote-coluna-select" data-lote-index="${idx}">
+                        ${estado.colunas.map(col => `<option value="${escapeHtml(col.id)}" ${faixa.colunaId === col.id ? 'selected' : ''}>${escapeHtml(col.nome)} ${col.tipo === 'debito' ? '−' : '+'}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="cag-lote-field cag-lote-valor">
+                    <label>Valor mensal</label>
+                    <input type="text" class="cag-lote-input cag-lote-valor-input" inputmode="decimal" placeholder="0,00" value="${escapeHtml(faixa.valor)}" data-lote-index="${idx}">
+                </div>
+                <button type="button" class="cag-lote-remover" data-lote-index="${idx}" title="Remover faixa" ${faixasLote.length === 1 ? 'disabled' : ''}>×</button>
+            </div>
+        `).join('');
+    }
+
+    function adicionarFaixaLote() {
+        faixasLote.push({ de: '', ate: '', colunaId: estado.colunas[0]?.id || '', valor: '' });
+        renderizarFaixasLote();
+        const inputs = document.querySelectorAll('.cag-lote-de');
+        inputs[inputs.length - 1]?.focus();
+    }
+
+    function removerFaixaLote(idx) {
+        if (faixasLote.length <= 1) return;
+        faixasLote.splice(idx, 1);
+        renderizarFaixasLote();
+    }
+
+    function aplicarPreenchimentoLote() {
+        const regrasValidas = [];
+        for (let i = 0; i < faixasLote.length; i++) {
+            const faixa = faixasLote[i];
+            const de = normalizarCompetencia(faixa.de);
+            const ate = normalizarCompetencia(faixa.ate);
+            if (!de && !ate && String(faixa.valor).trim() === '') continue;
+            if (!de || !ate) {
+                alert(`Preenchimento em lote — faixa ${i + 1}: informe corretamente as competências inicial e final.`);
+                return;
+            }
+            const competencias = gerarCompetencias(de, ate);
+            if (!competencias.length) {
+                alert(`Preenchimento em lote — faixa ${i + 1}: a competência inicial deve ser anterior ou igual à final.`);
+                return;
+            }
+            if (!faixa.colunaId || !estado.colunas.some(c => c.id === faixa.colunaId)) {
+                alert(`Preenchimento em lote — faixa ${i + 1}: selecione uma coluna válida.`);
+                return;
+            }
+            if (String(faixa.valor).trim() === '') {
+                alert(`Preenchimento em lote — faixa ${i + 1}: informe o valor mensal.`);
+                return;
+            }
+            regrasValidas.push({ de, ate, competencias, colunaId: faixa.colunaId, valor: String(faixa.valor).trim() });
+        }
+        if (!regrasValidas.length) {
+            alert('Informe pelo menos uma faixa para o preenchimento em lote.');
+            return;
+        }
+
+        // Cria as competências necessárias sem apagar dados já digitados.
+        const mapa = new Map();
+        estado.linhas.forEach(linha => {
+            const c = normalizarCompetencia(linha.competencia);
+            if (c) mapa.set(c, linha);
+        });
+        regrasValidas.forEach(regra => {
+            regra.competencias.forEach(comp => {
+                if (!mapa.has(comp)) {
+                    const valores = {};
+                    estado.colunas.forEach(col => valores[col.id] = '');
+                    const linha = { competencia: comp, valores };
+                    estado.linhas.push(linha);
+                    mapa.set(comp, linha);
+                }
+                mapa.get(comp).competencia = comp;
+                mapa.get(comp).valores[regra.colunaId] = regra.valor;
+            });
+        });
+
+        // Mantém a tabela em ordem cronológica, deixando a linha vazia por último.
+        estado.linhas.sort((a, b) => {
+            const na = competenciaParaNumero(a.competencia);
+            const nb = competenciaParaNumero(b.competencia);
+            if (na === null && nb === null) return 0;
+            if (na === null) return 1;
+            if (nb === null) return -1;
+            return na - nb;
+        });
+
+        renderizar();
+        renderizarFaixasLote();
     }
 
     function mostrarTutorial() {
@@ -197,15 +339,34 @@
         container.addEventListener('click', e => {
             const btnCol = e.target.closest('.cag-remove-col');
             if (btnCol) removerColuna(btnCol.dataset.colId);
+            const btnFaixa = e.target.closest('.cag-lote-remover');
+            if (btnFaixa) removerFaixaLote(Number(btnFaixa.dataset.loteIndex));
+        });
+
+        const lote = document.getElementById('cagFaixasLote');
+        lote?.addEventListener('input', e => {
+            const idx = Number(e.target.dataset.loteIndex);
+            if (!Number.isInteger(idx) || !faixasLote[idx]) return;
+            if (e.target.classList.contains('cag-lote-de')) faixasLote[idx].de = e.target.value;
+            if (e.target.classList.contains('cag-lote-ate')) faixasLote[idx].ate = e.target.value;
+            if (e.target.classList.contains('cag-lote-valor-input')) faixasLote[idx].valor = e.target.value;
+        });
+        lote?.addEventListener('change', e => {
+            const idx = Number(e.target.dataset.loteIndex);
+            if (!Number.isInteger(idx) || !faixasLote[idx]) return;
+            if (e.target.classList.contains('cag-lote-coluna-select')) faixasLote[idx].colunaId = e.target.value;
         });
 
         document.getElementById('btnCagAdicionarLinha')?.addEventListener('click', adicionarLinha);
         document.getElementById('btnCagRemoverLinha')?.addEventListener('click', removerLinha);
         document.getElementById('btnCagAdicionarColuna')?.addEventListener('click', adicionarColuna);
+        document.getElementById('btnCagAdicionarFaixa')?.addEventListener('click', adicionarFaixaLote);
+        document.getElementById('btnCagAplicarLote')?.addEventListener('click', aplicarPreenchimentoLote);
         document.getElementById('btnCagTutorial')?.addEventListener('click', mostrarTutorial);
         document.getElementById('fecharTutorialAcoesGerais')?.addEventListener('click', () => document.getElementById('modalTutorialAcoesGerais')?.classList.add('hidden'));
         document.getElementById('fecharTutorialAcoesGerais2')?.addEventListener('click', () => document.getElementById('modalTutorialAcoesGerais')?.classList.add('hidden'));
         renderizar();
+        renderizarFaixasLote();
     }
 
     window.contadjusAcoesGerais = {

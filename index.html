@@ -481,6 +481,23 @@
                         <button type="button" id="btnCagAdicionarColuna" class="cag-btn">+ Coluna</button>
                         <span id="cagResumo" class="cag-summary">1 competência(s) • 1/6 colunas de composição • Total: R$ 0,00</span>
                     </div>
+
+                    <!-- Preenchimento em lote: fica antes da tabela/cabeçalho. -->
+                    <div class="cag-lote-box">
+                        <div class="cag-lote-head">
+                            <div>
+                                <strong>Preenchimento em lote</strong>
+                                <span>Informe uma ou várias faixas de competência e o valor mensal. As competências serão criadas e preenchidas automaticamente.</span>
+                            </div>
+                            <button type="button" id="btnCagAdicionarFaixa" class="cag-btn">+ Faixa</button>
+                        </div>
+                        <div id="cagFaixasLote" class="cag-faixas-lote"></div>
+                        <div class="cag-lote-actions">
+                            <span>Você pode usar valores diferentes em cada faixa e em colunas diferentes.</span>
+                            <button type="button" id="btnCagAplicarLote" class="cag-btn cag-btn-primary">Preencher automaticamente</button>
+                        </div>
+                    </div>
+
                     <div class="cag-table-wrap">
                         <table id="tabelaComposicaoAcoesGerais" class="cag-table">
                             <thead></thead>

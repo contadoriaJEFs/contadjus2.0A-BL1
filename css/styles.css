@@ -3444,3 +3444,123 @@
 .cag-total-cell { text-align:right; font-weight:700; color:#0f172a; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .cag-footnote { margin:9px 0 0; font-size:11px; color:#64748b; }
 @media (max-width:700px) { .cag-topbar { flex-direction:column; } .cag-summary { margin-left:0; width:100%; } }
+
+/* =====================================================================
+   CONTADJUS 2.0A — MELHORIAS BLOCO 1: LOTE + IDENTIDADE CRÉDITO/DÉBITO
+   Escopo exclusivo: #composicaoAcoesGerais
+   ===================================================================== */
+#composicaoAcoesGerais .cag-lote-box {
+    border: 1px solid #dbe3ee;
+    background: #f8fafc;
+    border-radius: 8px;
+    padding: 10px;
+    margin: 0 0 12px;
+}
+#composicaoAcoesGerais .cag-lote-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+#composicaoAcoesGerais .cag-lote-head strong {
+    display: block;
+    font-size: 12px;
+    color: #334155;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+}
+#composicaoAcoesGerais .cag-lote-head span,
+#composicaoAcoesGerais .cag-lote-actions span {
+    display: block;
+    margin-top: 2px;
+    font-size: 11px;
+    color: #64748b;
+}
+#composicaoAcoesGerais .cag-faixas-lote {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+#composicaoAcoesGerais .cag-lote-row {
+    display: grid;
+    grid-template-columns: minmax(105px, 1fr) auto minmax(105px, 1fr) minmax(150px, 1.3fr) minmax(120px, 1fr) 28px;
+    align-items: end;
+    gap: 7px;
+    padding: 7px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #fff;
+}
+#composicaoAcoesGerais .cag-lote-field label {
+    display: block;
+    margin: 0 0 3px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+}
+#composicaoAcoesGerais .cag-lote-input {
+    width: 100%;
+    min-height: 30px;
+    box-sizing: border-box;
+    border: 1px solid #cbd5e1;
+    border-radius: 5px;
+    background: #fff;
+    color: #0f172a;
+    padding: 5px 7px;
+    font-size: 12px;
+}
+#composicaoAcoesGerais .cag-lote-input:focus {
+    outline: none;
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 1px #60a5fa;
+}
+#composicaoAcoesGerais .cag-lote-separador {
+    padding-bottom: 7px;
+    font-size: 11px;
+    color: #64748b;
+}
+#composicaoAcoesGerais .cag-lote-remover {
+    width: 28px;
+    height: 30px;
+    border: 1px solid #fecaca;
+    border-radius: 5px;
+    background: #fff;
+    color: #b91c1c;
+    font-size: 17px;
+    line-height: 1;
+    cursor: pointer;
+}
+#composicaoAcoesGerais .cag-lote-remover:hover:not(:disabled) { background: #fef2f2; }
+#composicaoAcoesGerais .cag-lote-remover:disabled { opacity: .35; cursor: default; }
+#composicaoAcoesGerais .cag-lote-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 8px;
+}
+#composicaoAcoesGerais .cag-lote-actions span { margin: 0; }
+
+/* Crédito: azul muito suave. Débito: vermelho muito suave. */
+#composicaoAcoesGerais .cag-cell-credito {
+    background: #eff6ff;
+}
+#composicaoAcoesGerais .cag-cell-debito {
+    background: #fef2f2;
+}
+#composicaoAcoesGerais .cag-cell-credito:focus {
+    background: #e8f2ff;
+}
+#composicaoAcoesGerais .cag-cell-debito:focus {
+    background: #feeaea;
+}
+
+@media (max-width: 900px) {
+    #composicaoAcoesGerais .cag-lote-row {
+        grid-template-columns: repeat(2, minmax(130px, 1fr)) 28px;
+    }
+    #composicaoAcoesGerais .cag-lote-separador { display: none; }
+    #composicaoAcoesGerais .cag-lote-actions { align-items: flex-end; flex-direction: column; }
+}
