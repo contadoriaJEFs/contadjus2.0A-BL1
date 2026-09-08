@@ -720,6 +720,9 @@ function definirTermoInicial(valor, origem) {
         if (status1) status1.textContent = 'Termo calculado automaticamente.';
         if (status2) status2.textContent = 'Termo calculado automaticamente.';
     }
+    if (typeof window.contadjusAcoesGerais?.atualizarPainelTermoInicial === 'function') {
+        window.contadjusAcoesGerais.atualizarPainelTermoInicial();
+    }
 }
 
 function calcularTermoInicial() {

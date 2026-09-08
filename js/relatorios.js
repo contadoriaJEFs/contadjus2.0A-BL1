@@ -701,7 +701,21 @@ function gerarSecaoComposicaoAcoesGeraisRelatorioProfissional(continuaEmNovaPagi
     const api = window.contadjusAcoesGerais;
     const dados = api?.obterDados?.();
     const colunas = api?.obterColunasComDados?.() || [];
-    const linhas = Array.isArray(dados?.linhas) ? dados.linhas.filter(l => String(l.competencia || '').trim()) : [];
+    const todasLinhas = Array.isArray(dados?.linhas) ? dados.linhas.filter(l => String(l.competencia || '').trim()) : [];
+    const termoNumero = (() => {
+        const v = String(document.getElementById('termoInicialDiferencas')?.value || '').trim();
+        const m = v.match(/^(\d{1,2})\/(\d{4})$/);
+        return m ? Number(m[2]) * 12 + Number(m[1]) - 1 : null;
+    })();
+    const compNumero = (v) => {
+        const m = String(v || '').trim().match(/^(\d{1,2})\/(\d{4})$/);
+        return m ? Number(m[2]) * 12 + Number(m[1]) - 1 : null;
+    };
+    const linhas = todasLinhas.filter(l => {
+        const n = compNumero(l.competencia);
+        return termoNumero === null || n === null || n >= termoNumero;
+    });
+    const linhasDesconsideradas = todasLinhas.length - linhas.length;
     const fmt = (v) => relatorioValorMoeda(v);
     const parse = (v) => {
         if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
@@ -727,6 +741,7 @@ function gerarSecaoComposicaoAcoesGeraisRelatorioProfissional(continuaEmNovaPagi
             <div class=\"item\"><span class=\"rotulo\">Colunas com dados</span><span class=\"valor\">${colunas.length}</span></div>
         </div>
         <div class=\"quadro-totais-diferencas\"><div class=\"total principal\"><span>Total devido</span><strong>${relatorioEscaparHtml(fmt(total))}</strong></div></div>
+        ${linhasDesconsideradas > 0 ? `<p class=\"nota-relatorio\"><strong>${linhasDesconsideradas}</strong> competência(s) anterior(es) ao termo inicial foram desconsiderada(s) do resultado, embora permaneçam na composição para conferência.</p>` : ''}
         <div class=\"tabela-relatorio-complementar-wrap tabela-composicao-acoes-gerais-relatorio-wrap\"><table class=\"tabela-composicao-acoes-gerais-relatorio\"><thead><tr>${cabecalhos.map(h => `<th>${relatorioEscaparHtml(h)}</th>`).join('')}</tr></thead><tbody>${corpo}</tbody></table></div>
         <p class=\"nota-relatorio\">Composição das parcelas reproduzida a partir dos valores informados pelo usuário. Créditos somam e débitos subtraem. O Total Devido é calculado automaticamente por competência.</p>
     </section>`;

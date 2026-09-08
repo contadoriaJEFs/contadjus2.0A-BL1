@@ -42,9 +42,49 @@
         return estado.linhas.some(linha => String(linha.valores?.[id] ?? '').trim() !== '');
     }
 
+    function obterTermoInicialInfo() {
+        const termo = normalizarCompetencia(document.getElementById('termoInicialDiferencas')?.value || '');
+        const tipo = document.getElementById('tipoAcao')?.value || '';
+        const aplicar = document.getElementById('aplicarPrescricao')?.value === 'sim';
+        const prazo = parseInt(document.getElementById('prazoPrescricional')?.value, 10) || 5;
+        const ajuizamento = document.getElementById('dataAjuizamento')?.value || '';
+        const origemManual = typeof termoInicialManual !== 'undefined' && termoInicialManual;
+        return { termo, tipo, aplicar, prazo, ajuizamento, origemManual };
+    }
+
+    function atualizarPainelTermoInicial() {
+        const painel = document.getElementById('cagTermoInicialPainel');
+        if (!painel) return;
+        const info = obterTermoInicialInfo();
+        if (info.tipo !== 'condenatoria') {
+            painel.classList.add('hidden');
+            return;
+        }
+        painel.classList.remove('hidden');
+        const termoEl = painel.querySelector('[data-cag-termo]');
+        const criterioEl = painel.querySelector('[data-cag-criterio]');
+        const avisoEl = painel.querySelector('[data-cag-aviso]');
+        if (termoEl) termoEl.textContent = info.termo || 'Não definido';
+        if (criterioEl) {
+            if (info.origemManual) {
+                criterioEl.textContent = 'Termo informado manualmente para este caso específico.';
+            } else if (info.aplicar && info.ajuizamento) {
+                criterioEl.textContent = `Prescrição de ${info.prazo} anos, considerada a partir do ajuizamento (${info.ajuizamento}).`;
+            } else if (info.ajuizamento) {
+                criterioEl.textContent = `Termo de referência pelo ajuizamento (${info.ajuizamento}); o campo pode ser ajustado manualmente.`;
+            } else {
+                criterioEl.textContent = 'Informe o ajuizamento na Guia 1 para calcular o termo automaticamente.';
+            }
+        }
+        if (avisoEl) avisoEl.textContent = info.termo
+            ? `As competências anteriores a ${info.termo} permanecem disponíveis para conferência, mas serão desconsideradas na atualização e no relatório das diferenças.`
+            : 'Defina o termo inicial na Guia 1 para que o sistema aplique o limite das diferenças.';
+    }
+
     function renderizar() {
         const container = document.getElementById('composicaoAcoesGerais');
         if (!container) return;
+        atualizarPainelTermoInicial();
         const tabela = container.querySelector('#tabelaComposicaoAcoesGerais');
         if (!tabela) return;
         const thead = tabela.querySelector('thead');
@@ -230,10 +270,26 @@
     }
 
     function coletarParaAtualizacao() {
+        const termoNumero = competenciaParaNumero(document.getElementById('termoInicialDiferencas')?.value || '');
         return estado.linhas.map(linha => ({
-            competencia: String(linha.competencia || '').trim(),
+            competencia: normalizarCompetencia(linha.competencia) || String(linha.competencia || '').trim(),
             diferenca: Number(valorLinha(linha).toFixed(2))
-        })).filter(item => item.competencia && item.diferenca !== 0);
+        })).filter(item => {
+            if (!item.competencia || item.diferenca === 0) return false;
+            const compNumero = competenciaParaNumero(item.competencia);
+            // O termo inicial é o limite mínimo das diferenças.
+            // A composição permanece visível para conferência, mas parcelas anteriores
+            // não são encaminhadas à atualização.
+            return termoNumero === null || compNumero === null || compNumero >= termoNumero;
+        });
+    }
+
+    function obterLinhasElegiveisParaCalculo() {
+        const termoNumero = competenciaParaNumero(document.getElementById('termoInicialDiferencas')?.value || '');
+        return estado.linhas.filter(linha => {
+            const compNumero = competenciaParaNumero(linha.competencia);
+            return !!linha.competencia && (termoNumero === null || compNumero === null || compNumero >= termoNumero);
+        });
     }
 
     function normalizarCompetencia(valor) {
@@ -809,6 +865,8 @@
         obterDados,
         definirDados,
         coletarParaAtualizacao,
+        obterLinhasElegiveisParaCalculo,
+        atualizarPainelTermoInicial,
         temDados: () => estado.linhas.some(l => l.competencia || Object.values(l.valores || {}).some(v => String(v).trim() !== '')),
         obterColunasComDados: () => estado.colunas.filter(c => colunaTemValor(c.id))
     };
